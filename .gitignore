@@ -1,0 +1,49 @@
+# ============ СЕКРЕТЫ — НИКОГДА НЕ КОММИТИТЬ ============
+.env
+.env.local
+.secrets
+credentials.*
+*.credentials
+*.pem
+*.key
+
+# ============ ЛОГИ И ВРЕМЕННЫЕ ФАЙЛЫ ============
+*.log
+server.log
+tmp_*
+*.tmp
+
+# ============ ОТЧЁТЫ ДИАГНОСТИКИ (локальные, в репозиторий не нужны) ============
+reports/
+*_probe.py
+*_check.py
+one_shot.py
+diag_bridge.py
+cyr_final.py
+cache_probe.py
+memory_test.py
+memory_same.py
+render_check.py
+render_owner.py
+deploy_step*.py
+check_leak.py
+supa_probe.py
+
+# ============ РАБОЧАЯ ПАПКА АГЕНТА ============
+workspace/
+workspace/**
+!workspace/.gitkeep
+
+# ============ PYTHON ============
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============ ИНСТРУМЕНТЫ ============
+.ipynb_checkpoints/
