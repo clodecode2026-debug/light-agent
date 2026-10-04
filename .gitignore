@@ -4,6 +4,7 @@
 .secrets
 credentials.*
 *.credentials
+deploy_render.py
 *.pem
 *.key
 
