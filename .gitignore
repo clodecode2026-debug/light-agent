@@ -16,18 +16,22 @@ tmp_*
 
 # ============ ОТЧЁТЫ ДИАГНОСТИКИ (локальные, в репозиторий не нужны) ============
 reports/
-*_probe.py
-*_check.py
-one_shot.py
-diag_bridge.py
-cyr_final.py
-cache_probe.py
-memory_test.py
-memory_same.py
-render_check.py
-render_owner.py
-deploy_step*.py
-check_leak.py
+*.log
+
+# Локальные диагностические скрипты (живут в tests/, но запускаются вручную
+# и не нужны в сборке Render)
+tests/cyr_*.py
+tests/cache_*.py
+tests/one_shot.py
+tests/memory_*.py
+tests/render_*.py
+tests/deploy_*.py
+tests/supa_*.py
+tests/diag_bridge.py
+tests/check_leak.py
+tests/test_fc.py
+tests/test_storage.py
+tests/test_tools_protocol.py
 supa_probe.py
 
 # ============ РАБОЧАЯ ПАПКА АГЕНТА ============
