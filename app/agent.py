@@ -41,15 +41,33 @@ def run(user_message: str, session_id: str = "default",
     """
     touch()
 
-    # Собираем контекст: системный промпт + память сессии + новый вопрос
-    messages: list[dict] = [{"role": "system", "content": tools.SYSTEM_PROMPT}]
+    # Контекст: сжатая сводка прошлого + свежие сообщения + новый вопрос.
+    # Сжимаем, а не обрезаем: старые сообщения сворачиваются в пересказ,
+    # поэтому агент помнит важное, но не платит за всю переписку.
+    #
+    # Важно: сводка вклеивается в ТОТ ЖЕ системный промпт. Два system-сообщения
+    # подряд модели читают плохо - она отвечает "OK" на первый попавшийся вопрос.
+    system = tools.SYSTEM_PROMPT
+    messages: list[dict] = []
 
-    stored = history if history is not None else memory.get_history(session_id)
-    for m in stored[-20:]:
-        if m.get("role") in ("user", "assistant") and m.get("content"):
+    if history is not None:
+        for m in history[-24:]:
+            if m.get("role") in ("user", "assistant") and m.get("content"):
+                messages.append({"role": m["role"], "content": m["content"]})
+        messages.append({"role": "user", "content": user_message})
+    else:
+        # build_context сам добавляет вопрос последним элементом, убираем его.
+        built = memory.build_context(session_id, user_message)
+        if built and built[0]["role"] == "system":
+            system += "\n\n" + built[0]["content"]
+            fresh = built[1:-1]
+        else:
+            fresh = built[:-1]
+        for m in fresh:
             messages.append({"role": m["role"], "content": m["content"]})
+        messages.append({"role": "user", "content": user_message})
 
-    messages.append({"role": "user", "content": user_message})
+    messages.insert(0, {"role": "system", "content": system})
 
     memory.add_message(session_id, "user", user_message)
 
