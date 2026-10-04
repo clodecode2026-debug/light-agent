@@ -3,6 +3,7 @@ import io
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import httpx
 
@@ -14,7 +15,10 @@ SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. �
 
 Твои возможности:
 - Создаёшь, читаешь и правишь файлы в рабочей папке.
+- Точечно редактируешь существующие файлы через edit_file.
 - Создаёшь и удаляешь папки, перемещаешь и переименовываешь файлы.
+- Ищешь текст по всему проекту через grep.
+- Смотришь информацию об изображениях через view_image.
 - Ищешь информацию в интернете.
 - Выполняешь Python-код для вычислений и проверки гипотез.
 - Сохраняешь файлы в облачное хранилище.
@@ -22,12 +26,14 @@ SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. �
 
 Правила работы:
 1. Файлы создаёт и изменяет ТОЛЬКО через инструменты. В ответе описывай результат словами, а не кодом в блоке.
-2. Код запускай через инструмент execute_code или run_python_file, а не предлагай пользователю запустить его самому.
-3. Если задача требует нескольких шагов - выполняй их по очереди, а не описывай будущие шаги вместо выполнения.
-4. Создавая проект, сначала сделай папки через make_dir, потом файлы внутри них.
-5. Чтобы посмотреть структуру проекта, вызывай tree, а не list_files.
-6. Отвечай кратко и по делу, на языке пользователя.
-7. Не выдумывай результаты инструментов: если инструмент вернул ошибку - сообщи об этом.
+2. Чтобы поменять пару строк в готовом файле - вызывай edit_file, а не перезаписывай весь файл через write_file.
+3. Прежде чем читать много файлов, используй grep - так быстрее.
+4. Код запускай через run_python_file или execute_code, а не предлагай пользователю запустить его самому.
+5. Если задача требует нескольких шагов - выполняй их по очереди, а не описывай будущие шаги вместо выполнения.
+6. Создавая проект, сначала сделай папки через make_dir, потом файлы внутри них.
+7. Чтобы посмотреть структуру проекта, вызывай tree, а не list_files.
+8. Отвечай кратко и по делу, на языке пользователя.
+9. Не выдумывай результаты инструментов: если инструмент вернул ошибку - сообщи об этом.
 """
 
 _DANGEROUS = re.compile(
@@ -51,6 +57,25 @@ def _safe_path(rel: str) -> str:
     return full
 
 
+# Расширения, которые браузер умеет показать как картинку
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}
+IMAGE_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".svg": "image/svg+xml", ".ico": "image/x-icon",
+}
+
+
+def is_image(path: str) -> bool:
+    """Картинка ли это файла - по расширению."""
+    return Path(path).suffix.lower() in IMAGE_EXT
+
+
+def image_mime(path: str) -> str:
+    """Content-Type для картинки."""
+    return IMAGE_MIME.get(Path(path).suffix.lower(), "application/octet-stream")
+
+
 # ---------------- Файлы ----------------
 
 def tool_write_file(path: str, content: str) -> str:
@@ -63,6 +88,147 @@ def tool_write_file(path: str, content: str) -> str:
         return f"Записан файл {path} ({size} байт)"
     except Exception as exc:
         return f"Ошибка записи: {exc}"
+
+
+def tool_view_image(path: str) -> str:
+    """Описывает изображение: размеры и содержимое как текст, если это SVG.
+
+    Модель не умеет смотреть картинки напрямую, поэтому для растровых
+    файлов возвращаем метаданные, а для SVG - текстовое содержимое,
+    по которому можно понять, что нарисовано.
+    """
+    try:
+        full = _safe_path(path)
+        if not full.is_file():
+            return f"Файл не найден: {path}"
+        if not is_image(path):
+            return f"{path} - не картинка (расширение {Path(path).suffix})"
+
+        size = full.stat().st_size
+        if full.suffix.lower() == ".svg":
+            text = full.read_text(encoding="utf-8", errors="replace")
+            labels = re.findall(r">([^<>]{2,60})<", text)
+            shapes = len(re.findall(r"<(rect|circle|ellipse|path|line|polygon|polyline)",
+                                    text))
+            parts = [f"SVG-изображение {path} ({size} Б)",
+                     f"фигур: {shapes}"]
+            if labels:
+                parts.append("текст на картинке: " + "; ".join(labels[:25]))
+            return "\n".join(parts)
+
+        dims = ""
+        try:
+            from PIL import Image  # опционально
+            with Image.open(full) as im:
+                dims = f", размер {im.width}x{im.height}, режим {im.mode}"
+        except Exception:
+            # Без PIL размеры читаем вручную для PNG
+            if full.suffix.lower() == ".png":
+                try:
+                    head = full.read_bytes()[16:24]
+                    dims = f", размер {int.from_bytes(head[:4], 'big')}" \
+                           f"x{int.from_bytes(head[4:], 'big')}"
+                except Exception:
+                    pass
+        return (f"Картинка {path} ({size} Б{dims}). "
+                f"Растровое изображение - содержимое я описать не могу, "
+                f"скажи пользователю открыть его в панели файлов.")
+    except Exception as exc:
+        return f"Ошибка просмотра: {exc}"
+
+
+def tool_edit_file(path: str, old_text: str, new_text: str,
+                   replace_all: bool = False) -> str:
+    """Точечно меняет текст в файле: заменяет old_text на new_text."""
+    try:
+        full = _safe_path(path)
+        if not full.is_file():
+            return f"Файл не найден: {path}"
+        content = full.read_text(encoding="utf-8", errors="replace")
+
+        if old_text not in content:
+            # Подсказываем похожее - обычно ошибка в пробелах или отступах
+            hint = _closest_line(content, old_text)
+            extra = (f"\nПохожего текста нет. Ближайшая строка: {hint}"
+                     if hint else "")
+            return (f"Текст для замены не найден в {path}.{extra}")
+
+        count = content.count(old_text)
+        content = content.replace(old_text, new_text) if replace_all \
+            else content.replace(old_text, new_text, 1)
+        full.write_text(content, encoding="utf-8")
+
+        return (f"Изменён {path}: заменено "
+                f"{'все вхождения' if replace_all else '1 место'} "
+                f"(всего было {count})")
+    except Exception as exc:
+        return f"Ошибка правки: {exc}"
+
+
+def _closest_line(content: str, needle: str, limit: int = 120) -> str:
+    """Ищет строку, похожую на искомую - для подсказки при ошибке."""
+    import difflib
+    # Ищем по первой непустой строке запроса: пользователь может прислать
+    # многострочный кусок, а совпадение искать надо по первой строке.
+    lines_in = [ln.strip() for ln in (needle or "").splitlines() if ln.strip()]
+    needle = lines_in[0] if lines_in else ""
+    if not needle or len(needle) < 3:
+        return ""
+    matches = difflib.get_close_matches(needle, content.splitlines(), n=1,
+                                         cutoff=0.5)
+    return matches[0][:limit] if matches else ""
+
+
+def tool_grep(pattern: str, glob: str = "*", ignore_case: bool = False,
+              max_results: int = 40) -> str:
+    """Ищет текст по файлам проекта. Возвращает совпадения с номерами строк."""
+    try:
+        try:
+            rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+        except re.error as exc:
+            return f"Некорректное регулярное выражение: {exc}"
+
+        hits: list[str] = []
+        skipped = {"binary": 0, "big": 0}
+        for path in WORKSPACE.rglob(glob):
+            if not path.is_file() or len(hits) >= max_results:
+                continue
+            if any(part in (".git", "__pycache__", ".venv")
+                   for part in path.parts):
+                continue
+            if path.suffix.lower() in IMAGE_EXT:
+                skipped["binary"] += 1
+                continue
+            try:
+                if path.stat().st_size > 2_000_000:
+                    skipped["big"] += 1
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+
+            for num, line in enumerate(text.splitlines(), 1):
+                if rx.search(line):
+                    # Путь всегда со слэшами: на Windows str(Path) даёт
+                    # обратные, а модель ищет по прямым.
+                    rel = path.relative_to(WORKSPACE).as_posix()
+                    hits.append(f"{rel}:{num}: {line.strip()[:150]}")
+                    if len(hits) >= max_results:
+                        break
+
+        if not hits:
+            note = ""
+            if skipped["binary"] or skipped["big"]:
+                note = (f" Пропущено: {skipped['binary']} картинок, "
+                        f"{skipped['big']} больших файлов.")
+            return f"Ничего не найдено по запросу «{pattern}».{note}"
+
+        note = ""
+        if len(hits) >= max_results:
+            note = f"\nПоказаны первые {max_results} совпадений."
+        return "\n".join(hits) + note
+    except Exception as exc:
+        return f"Ошибка поиска: {exc}"
 
 
 def tool_read_file(path: str) -> str:
@@ -311,6 +477,24 @@ def build_tools() -> list[dict]:
         _tool("write_file", "Создаёт или перезаписывает текстовый файл.",
               {"path": _P, "content": {"type": "string", "description": "Содержимое файла"}},
               ["path", "content"]),
+        _tool("edit_file", "Точечно меняет текст в существующем файле. "
+                           "Используй вместо перезаписи всего файла, когда "
+                           "надо поменять одну-две строки.",
+              {"path": _P,
+               "old_text": {"type": "string", "description": "Что заменить (дословно)"},
+               "new_text": {"type": "string", "description": "На что заменить"},
+               "replace_all": {"type": "boolean", "description": "Заменить все вхождения"}},
+              ["path", "old_text", "new_text"]),
+        _tool("view_image", "Показывает информацию об изображении: размеры, "
+                            "а для SVG - ещё и текст на картинке.",
+              {"path": _P}, ["path"]),
+        _tool("grep", "Ищет текст по всем файлам проекта. Быстрее, чем открывать "
+                      "файлы по одному.",
+              {"pattern": {"type": "string", "description": "Регулярное выражение"},
+               "glob": {"type": "string", "description": "Маска файлов, по умолчанию '*'"},
+               "ignore_case": {"type": "boolean", "description": "Игнорировать регистр"},
+               "max_results": {"type": "integer", "description": "Сколько совпадений"}},
+              ["pattern"]),
         _tool("read_file", "Читает текстовый файл. Для просмотра содержимого.",
               {"path": _P}, ["path"]),
         _tool("list_files", "Показывает содержимое директории. По умолчанию '.'.",
@@ -349,6 +533,9 @@ def build_tools() -> list[dict]:
 
 _REGISTRY: dict[str, object] = {
     "write_file": tool_write_file,
+    "edit_file": tool_edit_file,
+    "view_image": tool_view_image,
+    "grep": tool_grep,
     "read_file": tool_read_file,
     "list_files": tool_list_files,
     "tree": tool_tree,
