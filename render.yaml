@@ -13,14 +13,23 @@ services:
     branch: main
 
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 65 --workers 1
 
     healthCheckPath: /health
 
-    # Python 3.12 - подтверждено рабочим локально
+    # Python 3.12 — подтверждено рабочим локально
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
+
+      # Один воркер: на free 1 CPU, а память 512 МБ. Два воркера
+      # съедят её за минуту. Потоки внутри уже есть — см. agent.py.
+      - key: WEB_CONCURRENCY
+        value: "1"
+
+      # Не даём requests/http.client накапливать сокеты
+      - key: UVICORN_LIMIT_CONCURRENCY
+        value: "20"
 
       # ---- Мост Antigravity (работает, функциональные вызовы есть) ----
       - key: AG_BASE_URL
