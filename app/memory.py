@@ -100,6 +100,34 @@ def status() -> dict:
     }
 
 
+def list_sessions(limit: int = 30) -> list[dict]:
+    """Сессии с последним сообщением - их можно переключать в интерфейсе.
+
+    Сортируем по времени последнего сообщения, чтобы свежие были сверху.
+    """
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        resp = (client.table(TABLE)
+                .select("session_id, created_at")
+                .order("id", desc=True)
+                .limit(500)
+                .execute())
+    except Exception:
+        return []
+
+    seen: dict[str, str] = {}
+    for row in (resp.data or []):
+        sid = row.get("session_id")
+        if sid and sid not in seen:
+            seen[sid] = row.get("created_at") or ""
+
+    items = [{"id": sid, "updated_at": ts} for sid, ts in seen.items()]
+    items.sort(key=lambda x: x["updated_at"], reverse=True)
+    return items[:limit]
+
+
 # ---------------------------------------------------------------------------
 # Сжатие истории
 # ---------------------------------------------------------------------------
