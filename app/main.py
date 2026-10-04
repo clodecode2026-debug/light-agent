@@ -1,7 +1,8 @@
 """FastAPI приложение: REST API + веб-интерфейс."""
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -222,6 +223,148 @@ async def admin_cleanup_preview(max_age_hours: int = 24,
 def datetime_now() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------- Файлы: загрузка, просмотр, папки ----------------
+
+def _safe(rel: str):
+    """Путь внутри рабочей папки.
+
+    Защита от выхода за её пределы: попытка указать ../ приводит
+    к 400, а не к необработанному исключению.
+    """
+    from .tools import _safe_path
+    try:
+        return _safe_path(rel or ".")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/tree")
+async def api_tree(path: str = ".", depth: int = 3):
+    """Структура проекта: папки и файлы вложенным списком."""
+    base = config.WORKSPACE
+
+    def build(p, level: int) -> list[dict]:
+        if level > depth:
+            return []
+        items: list[dict] = []
+        try:
+            entries = sorted(p.iterdir(),
+                             key=lambda x: (not x.is_dir(), x.name.lower()))
+        except Exception:
+            return []
+        for e in entries:
+            rel = str(e.relative_to(base)).replace("\\", "/")
+            if e.is_dir():
+                items.append({"type": "dir", "name": e.name, "path": rel,
+                              "children": build(e, level + 1)})
+            else:
+                try:
+                    size = e.stat().st_size
+                except OSError:
+                    size = 0
+                items.append({"type": "file", "name": e.name, "path": rel,
+                              "size": size})
+        return items
+
+    return {"path": path, "tree": build(_safe(path), 1),
+            "workspace": str(base)}
+
+
+@app.get("/api/files/download")
+async def api_download(path: str):
+    """Скачать файл из рабочей папки."""
+    full = _safe(path)
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(full, filename=full.name)
+
+
+@app.get("/api/file")
+async def api_read(path: str):
+    """Прочитать текстовый файл - для просмотра и правки в браузере."""
+    full = _safe(path)
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    try:
+        if full.stat().st_size > 400_000:
+            return {"path": path, "too_big": True,
+                    "message": "Файл больше 400 КБ - скачай его вместо просмотра"}
+        return {"path": path,
+                "content": full.read_text(encoding="utf-8", errors="replace")}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class FileBody(BaseModel):
+    path: str
+    content: str = ""
+
+
+@app.put("/api/file")
+async def api_save_file(body: FileBody):
+    """Сохранить содержимое файла - правка из браузера."""
+    if not body.path.strip():
+        raise HTTPException(status_code=400, detail="Не указан путь")
+    full = _safe(body.path)
+    try:
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(body.content, encoding="utf-8")
+        return {"ok": True, "path": body.path, "size": full.stat().st_size}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/mkdir")
+async def api_mkdir(body: FileBody):
+    """Создать папку."""
+    if not body.path.strip():
+        raise HTTPException(status_code=400, detail="Не указан путь")
+    full = _safe(body.path)
+    try:
+        full.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": body.path}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/file")
+async def api_delete(path: str, recursive: bool = False):
+    """Удалить файл или папку."""
+    full = _safe(path)
+    if full.is_dir():
+        if any(full.iterdir()) and not recursive:
+            raise HTTPException(
+                status_code=400,
+                detail="Папка не пустая. Повтори с recursive=true")
+        import shutil
+        shutil.rmtree(full) if recursive else full.rmdir()
+    elif full.is_file():
+        full.unlink()
+    else:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    return {"ok": True, "path": path}
+
+
+@app.post("/api/upload")
+async def api_upload(file: UploadFile = File(...)):
+    """Загрузить файл с компьютера в рабочую папку агента.
+
+    Агент сразу видит файл и может его читать, править и запускать.
+    """
+    name = os.path.basename((file.filename or "").replace("\\", "/"))
+    if not name or name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Недопустимое имя файла")
+
+    data = await file.read()
+    if len(data) > 5_000_000:
+        raise HTTPException(status_code=413,
+                            detail="Файл больше 5 МБ - сначала сожми его")
+
+    full = _safe(".") / name
+    full.write_bytes(data)
+    return {"ok": True, "name": name, "size": len(data), "path": name}
 
 
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
