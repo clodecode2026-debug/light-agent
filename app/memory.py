@@ -1,8 +1,15 @@
 """Хранение истории диалогов в Supabase.
 
-Если Supabase не настроен — агент работает без постоянной памяти,
+Таблицы:
+  agent_messages - переписка (роль, текст, время, метаданные)
+  agent_projects - проекты: изолированные папки с файлами
+  agent_facts   - память о пользователе и проектах (долговременная)
+  agent_actions - журнал всех действий агента
+
+Если Supabase не настроен - агент работает без постоянной памяти,
 используя только переданную в запросе историю.
 """
+import json
 from datetime import datetime, timezone
 
 from . import config
@@ -11,6 +18,9 @@ _client = None
 _unavailable = False
 
 TABLE = "agent_messages"
+PROJECTS_TABLE = "agent_projects"
+FACTS_TABLE = "agent_facts"
+ACTIONS_TABLE = "agent_actions"
 
 
 def _get_client():
@@ -49,48 +59,125 @@ def ensure_schema() -> bool:
         return False
 
 
-def add_message(session_id: str, role: str, content: str) -> bool:
+def add_message(session_id: str, role: str, content: str,
+                 meta: dict | None = None, project: str = "") -> bool:
+    """Сохраняет сообщение. meta - модель, время, действия (для истории)."""
+    proj = (project or config.get_current_project() or "default").strip() or "default"
     client = _get_client()
     if client is None:
-        return False
+        return _local_add_message(session_id, role, content, meta, proj)
     try:
-        client.table("agent_messages").insert({
-            "session_id": session_id, "role": role, "content": content[:8000],
-        }).execute()
+        row = {
+            "session_id": session_id,
+            "role": role,
+            "content": content[:8000],
+            "project": proj,
+        }
+        if meta:
+            row["meta"] = json.dumps(meta, ensure_ascii=False)[:2000]
+        client.table(TABLE).insert(row).execute()
         return True
     except Exception:
-        return False
+        return _local_add_message(session_id, role, content, meta, proj)
 
 
-def get_history(session_id: str, limit: int = 20) -> list[dict]:
-    """Последние сообщения сессии в порядке возрастания."""
+def get_history(session_id: str, limit: int = 50, project: str | None = None) -> list[dict]:
+    """Последние сообщения сессии в порядке возрастания.
+
+    Возвращает также created_at и метаданные (модель, время),
+    чтобы интерфейс мог показать переписку как она была.
+    """
     client = _get_client()
     if client is None:
-        return []
+        return _local_get_history(session_id, limit)
     try:
         resp = (
-            client.table("agent_messages")
-            .select("role, content")
+            client.table(TABLE)
+            .select("role, content, created_at, meta, project")
             .eq("session_id", session_id)
             .order("id", desc=True)
             .limit(limit)
             .execute()
         )
         rows = resp.data or []
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        out = []
+        for r in reversed(rows):
+            meta = r.get("meta")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = None
+            out.append({
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": str(r.get("created_at", "")),
+                "project": r.get("project") or "default",
+                "meta": meta if isinstance(meta, dict) else None,
+            })
+        return out
     except Exception:
-        return []
+        return _local_get_history(session_id, limit)
+
+
+def get_project_history(project: str, limit: int = 100) -> list[dict]:
+    """Вся переписка по выбранному проекту (папке).
+
+    Гарантирует, что при выборе любой папки сразу видна её полная история.
+    """
+    proj = (project or "default").strip() or "default"
+    client = _get_client()
+    if client is None:
+        data = _read_local()
+        filtered = [m for m in data if m.get("project") == proj]
+        return filtered[-limit:]
+    try:
+        resp = (
+            client.table(TABLE)
+            .select("session_id, role, content, created_at, meta, project")
+            .eq("project", proj)
+            .order("id", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = resp.data or []
+        out = []
+        for r in reversed(rows):
+            meta = r.get("meta")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = None
+            out.append({
+                "session_id": r.get("session_id") or f"proj-{proj}",
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": str(r.get("created_at", "")),
+                "project": r.get("project") or proj,
+                "meta": meta if isinstance(meta, dict) else None,
+            })
+        return out
+    except Exception:
+        data = _read_local()
+        filtered = [m for m in data if m.get("project") == proj]
+        return filtered[-limit:]
 
 
 def clear_session(session_id: str) -> bool:
     client = _get_client()
     if client is None:
-        return False
+        return _local_clear_session(session_id)
     try:
-        client.table("agent_messages").delete().eq("session_id", session_id).execute()
+        client.table(TABLE).delete().eq("session_id", session_id).execute()
+        _local_clear_session(session_id)
         return True
     except Exception:
-        return False
+        return _local_clear_session(session_id)
+
+
+def delete_session(session_id: str) -> bool:
+    return clear_session(session_id)
 
 
 def status() -> dict:
@@ -100,32 +187,126 @@ def status() -> dict:
     }
 
 
-def list_sessions(limit: int = 30) -> list[dict]:
-    """Сессии с последним сообщением - их можно переключать в интерфейсе.
+def list_sessions(limit: int = 50, project: str | None = None) -> list[dict]:
+    """Сессии с названием и датой для отображения на любом устройстве.
 
-    Сортируем по времени последнего сообщения, чтобы свежие были сверху.
+    Если указан project, фильтрует сессии по проекту.
     """
     client = _get_client()
     if client is None:
-        return []
-    try:
-        resp = (client.table(TABLE)
-                .select("session_id, created_at")
-                .order("id", desc=True)
-                .limit(500)
-                .execute())
-    except Exception:
-        return []
+        return _local_list_sessions(limit, project)
 
-    seen: dict[str, str] = {}
+    try:
+        q = (client.table(TABLE)
+             .select("session_id, created_at, role, content, project")
+             .order("id", desc=True)
+             .limit(600))
+        if project:
+            q = q.eq("project", project)
+        resp = q.execute()
+    except Exception:
+        return _local_list_sessions(limit, project)
+
+    sessions: dict[str, dict] = {}
     for row in (resp.data or []):
         sid = row.get("session_id")
-        if sid and sid not in seen:
-            seen[sid] = row.get("created_at") or ""
+        if not sid:
+            continue
+        if sid not in sessions:
+            sessions[sid] = {
+                "id": sid,
+                "project": row.get("project") or "default",
+                "updated_at": row.get("created_at") or "",
+                "title": "",
+                "message_count": 0,
+            }
+        sessions[sid]["message_count"] += 1
+        if not sessions[sid]["title"] and row.get("role") == "user" and row.get("content"):
+            title = row["content"].strip().replace("\n", " ")
+            if len(title) > 36:
+                title = title[:35] + "…"
+            sessions[sid]["title"] = title
 
-    items = [{"id": sid, "updated_at": ts} for sid, ts in seen.items()]
-    items.sort(key=lambda x: x["updated_at"], reverse=True)
-    return items[:limit]
+    out = []
+    for sid, data in sessions.items():
+        if not data["title"]:
+            data["title"] = sid
+        out.append(data)
+    out.sort(key=lambda x: x["updated_at"], reverse=True)
+    return out[:limit]
+
+
+def _read_local() -> list[dict]:
+    try:
+        f = config.WORKSPACE / ".memory_cache.json"
+        if f.is_file():
+            return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def _write_local(data: list[dict]) -> None:
+    try:
+        f = config.WORKSPACE / ".memory_cache.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _local_add_message(session_id: str, role: str, content: str,
+                       meta: dict | None = None, project: str = "default") -> bool:
+    data = _read_local()
+    data.append({
+        "session_id": session_id,
+        "role": role,
+        "content": content[:8000],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "project": project or "default",
+        "meta": meta,
+    })
+    _write_local(data[-1000:])
+    return True
+
+
+def _local_get_history(session_id: str, limit: int = 50) -> list[dict]:
+    data = _read_local()
+    filtered = [m for m in data if m.get("session_id") == session_id]
+    return filtered[-limit:]
+
+
+def _local_clear_session(session_id: str) -> bool:
+    data = _read_local()
+    data = [m for m in data if m.get("session_id") != session_id]
+    _write_local(data)
+    return True
+
+
+def _local_list_sessions(limit: int = 50, project: str | None = None) -> list[dict]:
+    data = _read_local()
+    if project:
+        data = [m for m in data if m.get("project") == project]
+    sessions: dict[str, dict] = {}
+    for m in reversed(data):
+        sid = m.get("session_id")
+        if not sid:
+            continue
+        if sid not in sessions:
+            title = ""
+            if m.get("role") == "user":
+                title = m.get("content", "").strip().replace("\n", " ")[:35]
+            sessions[sid] = {
+                "id": sid,
+                "project": m.get("project", "default"),
+                "updated_at": m.get("created_at", ""),
+                "title": title or sid,
+                "message_count": 0,
+            }
+        sessions[sid]["message_count"] += 1
+    out = list(sessions.values())
+    out.sort(key=lambda x: x["updated_at"], reverse=True)
+    return out[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -178,15 +359,13 @@ def _build_summary(old: list[dict]) -> str:
 
 
 def build_context(session_id: str, user_message: str,
-                  recent: int = RECENT_MESSAGES) -> list[dict]:
+                  recent: int = RECENT_MESSAGES, project: str | None = None) -> list[dict]:
     """Готовит сообщения для LLM: сводка + свежие сообщения + новый вопрос.
 
     Возвращает список ровно в формате OpenAI Chat Completions.
     """
     # Забираем с запасом: часть пойдёт в сводку, часть - дословно.
-    # limit считается по строкам, а нужен запас на 3x, иначе старая
-    # история обрезается и факты из неё теряются.
-    stored = get_history(session_id, limit=recent * 4)
+    stored = get_history(session_id, limit=recent * 4, project=project)
 
     messages: list[dict] = []
     if len(stored) <= recent:
