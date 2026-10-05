@@ -106,6 +106,49 @@ except Exception as e:
     bad += 1
 
 lines.append("")
+lines.append("=== PWA на проде ===")
+PWA = [
+    ("/manifest.json", 200, "манифест"),
+    ("/static/sw.js", 200, "service worker"),
+    ("/static/icons/icon-192.png", 200, "иконка 192"),
+    ("/static/icons/icon-512.png", 200, "иконка 512"),
+    ("/static/icons/maskable-512.png", 200, "maskable-иконка"),
+    ("/static/icons/icon-180.png", 200, "apple-touch-icon"),
+]
+for path, expect, label in PWA:
+    code, body, hdrs = probe(path, timeout=120)
+    good = code == expect
+    ok, bad = (ok + 1, bad) if good else (ok, bad + 1)
+    ctype = next((v for k, v in hdrs.items() if k.lower() == "content-type"), "?")
+    lines.append(f"{'OK  ' if good else 'FAIL'} {label:22} {code} "
+                 f"{len(body)} Б {ctype}")
+
+# Заголовки на главной нужны для установки.
+# Сервер отдаёт имена в нижнем регистре (HTTP/2), а urllib сохраняет
+# регистр как есть — ищем без учёта регистра, иначе тест врёт.
+code, body, hdrs = probe("/", timeout=120)
+lower = {k.lower(): v for k, v in hdrs.items()}
+swa = lower.get("service-worker-allowed", "")
+cc = lower.get("cache-control", "")
+lines.append(f"Service-Worker-Allowed: {swa or 'НЕТ'}")
+lines.append(f"Cache-Control: {cc or 'НЕТ'}")
+if swa != "/":
+    lines.append("  ВНИМАНИЕ: нет Service-Worker-Allowed")
+    bad += 1
+else:
+    ok += 1
+
+for needle, label in (('rel="manifest"', "HTML: link на манифест"),
+                      ("viewport-fit=cover", "HTML: безопасные зоны"),
+                      ('id="bInstall"', "HTML: кнопка установки")):
+    if needle in body:
+        lines.append(f"OK   {label}")
+        ok += 1
+    else:
+        lines.append(f"FAIL {label}")
+        bad += 1
+
+lines.append("")
 lines.append(f"ИТОГО: успешно {ok}, проблем {bad}")
 
 with open("reports/live_check.txt", "w", encoding="utf-8") as f:
