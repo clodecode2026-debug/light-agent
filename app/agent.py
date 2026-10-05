@@ -13,7 +13,7 @@ from concurrent.futures import Future as _Future
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from . import llm, memory, tools
+from . import config, llm, memory, tools
 
 MAX_STEPS = 12           # защита от бесконечного цикла вызовов инструментов
 MAX_TOOL_OUTPUT = 8000   # сколько символов вывода инструмента уходит модели
@@ -57,7 +57,7 @@ def cancel(session_id: str) -> bool:
 
 
 def _build_messages(session_id: str, user_message: str,
-                    history: list[dict] | None) -> list[dict]:
+                    history: list[dict] | None, project: str = "default") -> list[dict]:
     """Собирает контекст для LLM.
 
     Сводка о прошлом вклеивается в ТОТ ЖЕ системный промпт. Два
@@ -74,7 +74,7 @@ def _build_messages(session_id: str, user_message: str,
         messages.append({"role": "user", "content": user_message})
     else:
         # build_context сам добавляет вопрос последним элементом — режем его.
-        built = memory.build_context(session_id, user_message)
+        built = memory.build_context(session_id, user_message, project=project)
         if built and built[0]["role"] == "system":
             system += "\n\n" + built[0]["content"]
             fresh = built[1:-1]
@@ -90,7 +90,8 @@ def _build_messages(session_id: str, user_message: str,
 
 def run(user_message: str, session_id: str = "default",
         history: list[dict] | None = None,
-        on_event=None, cancel_event: threading.Event | None = None) -> dict:
+        on_event=None, cancel_event: threading.Event | None = None,
+        project: str = "default") -> dict:
     """Выполняет задачу и возвращает финальный ответ.
 
     on_event(kind: str, payload: dict) вызывается по ходу работы:
@@ -109,9 +110,11 @@ def run(user_message: str, session_id: str = "default",
         except Exception:
             pass  # ошибка интерфейса не должна ломать задачу
 
+    # Изолируем рабочую директорию проекта для текущего потока агента
+    config.set_current_project(project)
     touch()
-    messages = _build_messages(session_id, user_message, history)
-    memory.add_message(session_id, "user", user_message)
+    messages = _build_messages(session_id, user_message, history, project=project)
+    memory.add_message(session_id, "user", user_message, project=project)
 
     tool_specs = tools.build_tools()
     steps: list[str] = []
@@ -143,7 +146,7 @@ def run(user_message: str, session_id: str = "default",
 
             if not resp["tool_calls"]:
                 answer = (resp["content"] or "").strip() or "Готово."
-                memory.add_message(session_id, "assistant", answer)
+                memory.add_message(session_id, "assistant", answer, project=project)
                 _log(f"done in {round(time.perf_counter() - total_start, 2)}s "
                      f"via {provider_used}, steps: {step}")
                 return {
@@ -196,10 +199,11 @@ def run(user_message: str, session_id: str = "default",
 
 
 def run_stream(user_message: str, session_id: str = "default",
-               history: list[dict] | None = None):
+               history: list[dict] | None = None, project: str = "default"):
     """Стриминг текста без инструментов — быстрый режим для вопросов."""
+    config.set_current_project(project)
     touch()
-    messages = _build_messages(session_id, user_message, history)
+    messages = _build_messages(session_id, user_message, history, project=project)
 
     full: list[str] = []
     try:
@@ -212,7 +216,7 @@ def run_stream(user_message: str, session_id: str = "default",
 
     answer = "".join(full).strip()
     if answer:
-        memory.add_message(session_id, "assistant", answer)
+        memory.add_message(session_id, "assistant", answer, project=project)
 
 
 # Пул из одного потока: не даёт съесть память Render free (512 МБ).
@@ -220,11 +224,11 @@ _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent")
 
 
 def submit(session_id: str, message: str, history=None,
-           on_event=None) -> "Job":
+           on_event=None, project: str = "default") -> "Job":
     """Запускает задачу в отдельном потоке."""
     ev = threading.Event()
     _active_cancel[session_id] = ev
-    fut = _pool.submit(run, message, session_id, history, on_event, ev)
+    fut = _pool.submit(run, message, session_id, history, on_event, ev, project)
     return Job(fut, session_id)
 
 
