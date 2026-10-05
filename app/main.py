@@ -18,7 +18,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import agent, config, keepsleep, llm, memory, storage, tools
+from . import (agent, config, infra, keepsleep, llm, memory, storage,
+               tools, vault)
 
 WEB_DIR = config.BASE_DIR / "web"
 
@@ -34,6 +35,9 @@ SSE_MAX_SECONDS = 300
 async def lifespan(app: FastAPI):
     if memory.ensure_schema():
         print("[start] Supabase schema ready", flush=True)
+    # Хранилище секретов: таблица создаётся сама через Management API
+    vres = vault.ensure_table()
+    print(f"[start] vault: {vres}", flush=True)
     if storage.ensure_bucket():
         print(f"[start] bucket {config.S3_BUCKET} ready", flush=True)
     keepsleep.start()
@@ -129,6 +133,7 @@ async def status():
         "workspace": str(config.WORKSPACE),
         "agent": agent.state(),
         "tools": [t["function"]["name"] for t in tools.build_tools()],
+        "infra": infra.status(),
     }
 
 
@@ -386,6 +391,44 @@ async def api_rename(body: dict):
 @app.get("/api/files")
 async def files(prefix: str = ""):
     return {"files": storage.list_keys(prefix)}
+
+
+# ---------------- Секреты (шифрованное хранилище) ----------------
+
+@app.post("/admin/vault")
+async def vault_set(body: dict,
+                    authorization: str | None = Header(default=None)):
+    """Сохраняет секрет в зашифрованное хранилище.
+
+    Требует токен админа: через веб-интерфейс ключ не должен попасть
+    в историю браузера или в логи.
+    """
+    _require_admin(authorization)
+    name = (body or {}).get("name", "")
+    value = (body or {}).get("value", "")
+    note = (body or {}).get("note", "")
+    res = vault.set_secret(name, value, note)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error"))
+    return res
+
+
+@app.get("/api/vault")
+async def vault_list():
+    """Список секретов. Значения НЕ отдаются - только имена и заметки."""
+    items = vault.list_secrets()
+    return {"secrets": items, "status": vault.status()}
+
+
+@app.delete("/admin/vault")
+async def vault_delete(name: str,
+                       authorization: str | None = Header(default=None)):
+    """Удаляет секрет."""
+    _require_admin(authorization)
+    res = vault.delete_secret(name)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error"))
+    return res
 
 
 # ---------------- Уборка (GitHub Actions) ----------------
