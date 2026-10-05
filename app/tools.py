@@ -12,6 +12,17 @@ from . import infra as _infra
 
 WORKSPACE = config.WORKSPACE
 
+
+def _ws() -> Path:
+    """Папка активного проекта.
+
+    Читается при каждом вызове, а не хранится в константе: тогда
+    переключение проекта в интерфейсе сразу меняет рабочую папку,
+    без перезапуска сервера.
+    """
+    return config.current_workspace()
+
+
 SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. Работаешь в облаке на сервере.
 
 Твои возможности:
@@ -46,15 +57,16 @@ _DANGEROUS = re.compile(
 SEARCH_URL = "https://html.duckduckgo.com/html/?q={}"
 
 
-def _safe_path(rel: str) -> str:
+def _safe_path(rel: str, project: str = "") -> Path:
     """Путь внутри рабочей папки — защита от выхода за её пределы."""
     if not rel or not rel.strip():
         raise ValueError("Путь не указан")
     if ".." in rel or rel.startswith("/") or ":" in rel:
         raise ValueError("Недопустимый путь")
-    full = (WORKSPACE / rel).resolve()
-    if not str(full).startswith(str(WORKSPACE.resolve())):
-        raise ValueError("Путь выходит за пределы рабочей папки")
+    base = config.project_dir(project) if project else _ws()
+    full = (base / rel).resolve()
+    if not str(full).startswith(str(base.resolve())):
+        raise ValueError("Путь выходит за пределы папки проекта")
     return full
 
 
@@ -191,7 +203,7 @@ def tool_grep(pattern: str, glob: str = "*", ignore_case: bool = False,
 
         hits: list[str] = []
         skipped = {"binary": 0, "big": 0}
-        for path in WORKSPACE.rglob(glob):
+        for path in _ws().rglob(glob):
             if not path.is_file() or len(hits) >= max_results:
                 continue
             if any(part in (".git", "__pycache__", ".venv")
@@ -212,7 +224,7 @@ def tool_grep(pattern: str, glob: str = "*", ignore_case: bool = False,
                 if rx.search(line):
                     # Путь всегда со слэшами: на Windows str(Path) даёт
                     # обратные, а модель ищет по прямым.
-                    rel = path.relative_to(WORKSPACE).as_posix()
+                    rel = path.relative_to(_ws()).as_posix()
                     hits.append(f"{rel}:{num}: {line.strip()[:150]}")
                     if len(hits) >= max_results:
                         break
@@ -326,7 +338,7 @@ def tool_move_file(source: str, destination: str) -> str:
         if dst.is_dir():
             dst = dst / src.name
         src.replace(dst)
-        return f"Перемещено: {source} -> {dst.relative_to(WORKSPACE)}"
+        return f"Перемещено: {source} -> {dst.relative_to(_ws())}"
     except Exception as exc:
         return f"Ошибка перемещения: {exc}"
 
@@ -392,7 +404,7 @@ def tool_run_python_file(path: str) -> str:
         if not full.exists():
             return f"Файл не найден: {path}"
         proc = subprocess.run(
-            [sys.executable, str(full)], cwd=str(WORKSPACE),
+            [sys.executable, str(full)], cwd=str(_ws()),
             capture_output=True, text=True, timeout=120,
         )
         output = (proc.stdout or "") + (proc.stderr or "")
