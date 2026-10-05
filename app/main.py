@@ -134,7 +134,12 @@ async def manifest():
 async def status():
     return {
         "providers": [
-            {"name": p["name"], "models": p["models"], "base_url": p["base_url"]}
+            {
+                "name": p["name"],
+                "models": p["models"],
+                "model_labels": p.get("model_labels", {}),
+                "base_url": p["base_url"],
+            }
             for p in config.providers()
         ],
         "llm_stats": llm.stats(),
