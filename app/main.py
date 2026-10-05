@@ -96,7 +96,22 @@ async def health():
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return FileResponse(WEB_DIR / "index.html")
+    """Главная страница. Заголовки нужны для установки как приложение (PWA)."""
+    resp = FileResponse(WEB_DIR / "index.html")
+    # Service worker нельзя отдавать из кэша HTTP — иначе браузер
+    # не увидит обновление и приложение застрянет на старой версии.
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
+@app.get("/manifest.json")
+async def manifest():
+    """Манифест PWA. Отдаём из /static, но с правильным Content-Type."""
+    path = WEB_DIR / "static" / "manifest.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Манифест не найден")
+    return FileResponse(path, media_type="application/manifest+json")
 
 
 @app.get("/api/status")
