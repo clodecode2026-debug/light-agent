@@ -7,51 +7,49 @@
    Источник: npm @anthropic-ai/claude-code-linux-x64, файл package/claude
    ========================================================================== */
 :root{
-  /* Фоны — тёплые, как в оригинале */
-  --bg:#141413;          /* основной фон, был #0d0f14 */
-  --bg2:#1a1a19;         /* чуть светлее для полей ввода */
-  --panel:#1e1e1c;       /* панели: шапка, сайдбар, файл-панель */
-  --panel2:#262624;      /* вложенные элементы, кнопки */
+  /* Фоны — аутентичная тёплая палитра Claude Code */
+  --bg:#141413;          /* основной тёплый кофейно-угольный фон */
+  --bg2:#1a1a19;         /* поля ввода, сайдбар */
+  --panel:#1e1e1c;       /* шапка, карточки, панели */
+  --panel2:#262624;      /* кнопки, вложенные блоки */
 
   /* Текст */
-  --txt:#e2e8f0;         /* основной, из оригинала */
-  --txt2:#b6bcc8;
-  --dim:#64748b;         /* приглушённый, из оригинала */
+  --txt:#e2e8f0;         /* основной светлый */
+  --txt2:#b6bcc8;        /* вторичный текст */
+  --dim:#64748b;         /* приглушённый моно/лейблы */
   --faint:#4a5568;
 
   /* Границы */
   --line:#2f2f2c;
   --line2:#3d3d39;
 
-  /* Акценты — терракотовый как в Claude */
-  --acc:#d77757;         /* ГЛАВНЫЙ акцент, из оригинала */
-  --acc-hi:#e08a6b;      /* светлее при наведении */
-  --acc-dim:rgba(215,119,87,.13);
-  --acc-line:rgba(215,119,87,.35);
+  /* Акценты — аутентичный терракотовый Claude */
+  --acc:#d77757;         /* фирменный терракотовый */
+  --acc-hi:#e08a6b;      /* подсветка при наведении */
+  --acc-dim:rgba(215,119,87,.14);
+  --acc-line:rgba(215,119,87,.38);
 
-  /* Служебные цвета — из оригинала */
-  --ok:#5a9e6f;
-  --warn:#f59e0b;        /* жёлтый оригинала */
-  --err:#ef4444;         /* красный оригинала */
+  /* Служебные цвета */
+  --ok:#5a9e6f;          /* шалфейный зелёный */
+  --warn:#f59e0b;
+  --err:#ef4444;
   --info:#5b8ac9;
 
-  /* Роли инструментов — как в оригинале */
-  --tool-read:#7aa2c4;   /* Read — спокойный синий */
-  --tool-write:#5a9e6f;  /* Write — зелёный */
-  --tool-edit:#c08a4e;   /* Edit — янтарный */
-  --tool-bash:#d77757;   /* Bash — терракотовый, главный акцент */
-  --tool-search:#9b7bc4; /* поиск — фиолетовый */
-  --tool-net:#5b8ac9;    /* сеть */
+  /* Роли инструментов */
+  --tool-read:#7aa2c4;
+  --tool-write:#5a9e6f;
+  --tool-edit:#c08a4e;
+  --tool-bash:#d77757;
+  --tool-search:#9b7bc4;
+  --tool-net:#5b8ac9;
 
-  /* Diff — зелёный добавление, красный удаление */
+  /* Diff */
   --diff-add:#3f7a4e;
   --diff-del:#a63c3c;
 
   --code:#e2e8f0;
-  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,
-         "Liberation Mono","Courier New",monospace;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
-         "Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -63,59 +61,80 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 button{font-family:inherit;font-size:13px;color:var(--txt);background:var(--panel2);
-  border:1px solid var(--line);padding:6px 12px;border-radius:7px;cursor:pointer;
-  transition:border-color .12s,background .12s;display:inline-flex;
-  align-items:center;gap:6px;line-height:1.4}
-button:hover{border-color:var(--line2);background:#232935}
-button:active{transform:translateY(1px)}
-button:disabled{opacity:.45;cursor:not-allowed;transform:none}
-button.primary{background:var(--acc);border-color:var(--acc);color:#1a1207;
-  font-weight:500}
-button.primary:hover{background:var(--acc-hi);border-color:var(--acc-hi)}
-button.ghost{background:transparent;border-color:transparent;color:var(--dim)}
-button.ghost:hover{background:var(--panel2);color:var(--txt)}
+  border:1px solid var(--line);padding:6px 13px;border-radius:9px;cursor:pointer;
+  transition:all .15s cubic-bezier(0.16,1,0.3,1);display:inline-flex;
+  align-items:center;gap:6px;line-height:1.4;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 1px 3px rgba(0,0,0,.25)}
+button:hover{border-color:var(--line2);background:var(--panel);transform:translateY(-1px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.09), 0 3px 8px rgba(0,0,0,.35)}
+button:active{transform:translateY(1px);box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+button:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+button.primary{background:linear-gradient(180deg, var(--acc-hi) 0%, var(--acc) 100%);
+  border:1px solid rgba(255,255,255,.15);color:#141413;font-weight:600;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.25), 0 2px 8px rgba(215,119,87,.35)}
+button.primary:hover{background:linear-gradient(180deg, #ebb19b 0%, var(--acc-hi) 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35), 0 4px 14px rgba(215,119,87,.48)}
+button.ghost{background:transparent;border-color:transparent;color:var(--dim);box-shadow:none}
+button.ghost:hover{background:var(--panel2);color:var(--txt);box-shadow:none}
 button.icon{padding:5px 8px;font-size:14px;line-height:1}
 button.danger:hover{border-color:var(--err);color:var(--err)}
-input,textarea,select{font-family:inherit;font-size:13px;color:var(--txt);
-  background:var(--bg2);border:1px solid var(--line);border-radius:7px;padding:7px 10px}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--acc)}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#2a3140;border-radius:5px;
-  border:2px solid var(--bg)}
-::-webkit-scrollbar-thumb:hover{background:#39425400;background:#394254}
 
-/* ---------- Шапка ---------- */
+/* Кнопка микрофона */
+.mic-btn{color:var(--dim);border-radius:8px;padding:6px 8px;transition:all .2s ease;display:inline-flex;align-items:center;justify-content:center}
+.mic-btn:hover{color:var(--acc-hi);background:var(--acc-dim)}
+.mic-btn.rec{background:rgba(239,68,68,.18);border-color:var(--err);color:var(--err);
+  animation:micpulse 1.2s ease-in-out infinite;box-shadow:0 0 14px rgba(239,68,68,.4)}
+@keyframes micpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+
+input,textarea,select{font-family:inherit;font-size:13px;color:var(--txt);
+  background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:7px 11px;
+  transition:border-color .15s,box-shadow .15s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--acc);
+  box-shadow:0 0 0 3px rgba(215,119,87,.2)}
+
+/* Тонкий элегантный скроллбар */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:10px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.24)}
+
+/* ---------- Шапка в стиле Claude Code macOS Terminal ---------- */
 header{
-  height:46px;flex-shrink:0;display:flex;align-items:center;gap:10px;
+  height:40px;flex-shrink:0;display:flex;align-items:center;gap:8px;
   padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);
-}
-.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;
-  letter-spacing:-.01em}
-.logo .name{color:var(--txt)}
-/* Марка-иконка в терракотовом, как логотип Claude */
-.logo .mark,.welcome h2 .mark{
-  width:18px;height:18px;border-radius:5px;flex-shrink:0;
-  background:linear-gradient(135deg,var(--acc) 0%,#c0603f 100%);
-  box-shadow:0 1px 3px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.15);
   position:relative;
 }
-.logo .mark::after,.welcome h2 .mark::after{
-  content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:6px;height:6px;border-radius:50%;background:#faf9f5;
+.win-controls{display:flex;align-items:center;gap:7px;margin-right:6px}
+.win-dot{width:11px;height:11px;border-radius:50%;display:inline-block;cursor:default;transition:opacity .15s}
+.win-dot:hover{opacity:.85}
+.dot-red{background:#ff5f56;box-shadow:0 0 5px rgba(255,95,86,.5)}
+.dot-yellow{background:#ffbd2e;box-shadow:0 0 5px rgba(255,189,46,.5)}
+.dot-green{background:#27c93f;box-shadow:0 0 5px rgba(39,201,63,.5)}
+
+/* Центрированный заголовок окна как в macOS Terminal */
+.win-title{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  font-family:var(--mono);font-size:12.5px;color:#7d8590;letter-spacing:.02em;
+  user-select:none;pointer-events:none;white-space:nowrap;display:flex;align-items:center;gap:6px;
 }
-.logo .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);
-  box-shadow:0 0 6px rgba(90,158,111,.6)}
-.logo .dot.busy{background:var(--warn);box-shadow:0 0 6px rgba(245,158,11,.6);
+.win-title-icon{width:16px;height:16px;border-radius:3px;object-fit:cover;
+  filter:drop-shadow(0 0 6px rgba(218,119,86,.6))}
+.win-title #winTitleProject{color:#c9d1d9;font-weight:600}
+
+/* Точка активности */
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 6px rgba(63,185,80,.6);display:inline-block;margin-left:2px}
+.dot.busy{background:var(--warn);box-shadow:0 0 6px rgba(245,158,11,.6);
   animation:pulse 1.1s ease-in-out infinite}
-.logo .dot.err{background:var(--err);box-shadow:0 0 6px rgba(239,68,68,.6)}
+.dot.err{background:var(--err);box-shadow:0 0 6px rgba(248,81,73,.6)}
 @keyframes pulse{50%{opacity:.35}}
-.sep{width:1px;height:20px;background:var(--line)}
+
+.sep{width:1px;height:18px;background:var(--line)}
 .badge{font-size:11px;color:var(--dim);background:var(--bg2);border:1px solid var(--line);
   padding:2px 8px;border-radius:20px;white-space:nowrap;cursor:default;
   font-family:var(--mono)}
-.badge.ok{color:var(--ok);border-color:#2a3f31}
-.badge.bad{color:var(--err);border-color:#4a2525}
+.badge.ok{color:var(--ok);border-color:#1e382b}
+.badge.bad{color:var(--err);border-color:#4a2222}
 .grow{flex:1}
 
 /* ---------- Каркас ---------- */
@@ -130,14 +149,20 @@ header{
   gap:6px;border-bottom:1px solid var(--line)}
 .side-head .grow{flex:1}
 .side-scroll{flex:1;overflow-y:auto;padding:6px}
+.proj-select-wrap{padding:7px 9px;border-bottom:1px solid var(--line);background:var(--bg2)}
+.proj-dropdown{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+  padding:6px 9px;font-size:12.5px;color:var(--txt);font-weight:500;cursor:pointer;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.sess-scroll{flex:0 0 auto;max-height:180px;overflow-y:auto;padding:4px 6px}
+.tree-scroll{flex:1 1 auto;overflow-y:auto;min-height:110px;padding:4px 6px}
 
 /* Дерево файлов */
 .tree{font-family:var(--mono);font-size:12.5px}
-.tnode{display:flex;align-items:center;gap:5px;padding:3px 6px;border-radius:5px;
-  cursor:pointer;white-space:nowrap;overflow:hidden}
+.tnode{display:flex;align-items:center;gap:5px;padding:4px 7px;border-radius:7px;
+  cursor:pointer;white-space:nowrap;overflow:hidden;transition:background .12s}
 .tnode:hover{background:var(--panel)}
 .tnode.sel{background:var(--acc-dim);color:var(--acc-hi);
-  box-shadow:inset 2px 0 0 var(--acc)}
+  box-shadow:inset 3px 0 0 var(--acc)}
 .tnode .nm{overflow:hidden;text-overflow:ellipsis}
 .tnode .sz{margin-left:auto;font-size:10px;color:var(--dim);flex-shrink:0}
 .tnode.sel .sz{color:#dfe6ff}
@@ -145,12 +170,19 @@ header{
 .hint{padding:16px 10px;color:var(--dim);font-size:12px;text-align:center;line-height:1.7}
 
 /* Сессии */
-.sess{display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:6px;
-  cursor:pointer;font-size:12.5px;color:var(--txt2)}
+.sess{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:7px;
+  cursor:pointer;font-size:12px;color:var(--txt2);margin-bottom:2px;position:relative;
+  transition:background .12s}
 .sess:hover{background:var(--panel)}
 .sess.sel{background:var(--acc-dim);color:var(--acc-hi);
-  box-shadow:inset 2px 0 0 var(--acc)}
+  box-shadow:inset 3px 0 0 var(--acc)}
 .sess .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess .cnt{font-size:10px;color:var(--dim);background:var(--panel2);padding:1px 5px;
+  border-radius:8px;font-family:var(--mono)}
+.sess .del{opacity:0;background:none;border:none;color:var(--faint);padding:2px 4px;
+  font-size:11px;cursor:pointer;line-height:1;border-radius:3px}
+.sess:hover .del{opacity:1}
+.sess .del:hover{color:var(--err);background:rgba(239,68,68,.15)}
 
 /* Секреты — зашифрованное хранилище */
 .sec{display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:6px;
@@ -179,11 +211,13 @@ header{
 .msg .av{width:25px;height:25px;border-radius:6px;flex-shrink:0;display:grid;
   place-items:center;font-size:11px;font-weight:600;margin-top:1px}
 .msg.u .av{background:var(--acc);color:#1a1207}
-.msg.a .av{background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
+.msg.a .av{background:transparent;border:none;overflow:hidden;padding:0}
+.msg.a .av img,.av-img{width:25px;height:25px;border-radius:6px;object-fit:cover;
+  display:block;filter:drop-shadow(0 0 6px rgba(218,119,86,.55))}
 .msg .body{flex:1;min-width:0}
 .bub{white-space:pre-wrap;word-wrap:break-word;line-height:1.7}
-.msg.u .bub{background:var(--panel);border:1px solid var(--line);padding:9px 13px;
-  border-radius:9px}
+.msg.u .bub{background:var(--panel);border:1px solid var(--line);padding:10px 15px;
+  border-radius:14px 14px 4px 14px;box-shadow:0 2px 10px rgba(0,0,0,.22)}
 .meta{font-size:11px;color:var(--dim);margin-top:6px;display:flex;gap:9px;
   flex-wrap:wrap;align-items:center}
 .meta .pill{background:var(--bg2);border:1px solid var(--line);padding:1px 7px;
@@ -280,25 +314,52 @@ header{
 .tk-v{color:#9cc4d8}   /* переменные */
 .tk-b{color:#d77757;font-weight:600} /* важное */
 
-/* ---------- Welcome ---------- */
-.welcome{text-align:center;padding:52px 20px;color:var(--dim)}
-.welcome h2{color:var(--txt);font-size:21px;font-weight:600;margin-bottom:10px;
-  letter-spacing:-.02em;display:flex;align-items:center;justify-content:center;
-  gap:10px}
-.welcome h2 .mark{width:22px;height:22px;border-radius:6px;flex-shrink:0}
-.welcome .sub{font-size:13px;margin-bottom:8px}
+/* ---------- Welcome: Claude Code Research Preview CLI ---------- */
+.welcome{text-align:center;padding:36px 16px 20px;color:var(--dim)}
+.claude-hero{display:flex;align-items:center;justify-content:center;gap:20px;
+  margin-bottom:24px;margin-top:4px}
+.claude-symbol-wrap{display:flex;align-items:center;justify-content:center;
+  animation:softpulse 4.5s ease-in-out infinite}
+.claude-symbol-img{width:86px;height:86px;border-radius:18px;object-fit:cover;
+  filter:drop-shadow(0 0 28px rgba(218,119,86,.85))}
+@keyframes softpulse{0%,100%{filter:drop-shadow(0 0 22px rgba(218,119,86,.65))}
+  50%{filter:drop-shadow(0 0 32px rgba(218,119,86,.85))}}
+.claude-hero-text{text-align:left}
+.claude-title{font-size:36px;font-weight:700;color:#fff;letter-spacing:-.02em;
+  line-height:1.1;margin:0}
+.claude-tag{font-family:var(--mono);font-size:12px;font-weight:700;
+  color:var(--acc);letter-spacing:2px;margin-top:6px;text-transform:uppercase}
+
+.cli-card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;
+  padding:18px 22px;max-width:640px;margin:0 auto 22px;text-align:left;
+  font-family:var(--mono);font-size:13px;line-height:1.95;
+  box-shadow:0 16px 36px rgba(0,0,0,.45)}
+.cli-line{display:flex;align-items:center;gap:9px;word-break:break-word}
+.cli-prompt{color:var(--dim);font-weight:600}
+.cli-cmd{color:var(--acc);font-weight:600}
+.cli-arg{color:var(--txt)}
+.cli-check{color:var(--ok);font-weight:bold}
+.cli-bold{color:var(--txt);font-weight:600}
+.cli-dim{color:var(--dim)}
+.cli-arrow{color:var(--acc);font-weight:bold}
+.cli-cursor{color:var(--acc);animation:blink 1.05s step-start infinite;display:inline-block;font-size:12px}
+@keyframes blink{50%{opacity:0}}
+
 .welcome .hintline{font-family:var(--mono);font-size:11.5px;color:var(--faint);
-  margin-bottom:26px}
+  margin-bottom:22px}
 .welcome .hintline b{color:var(--acc);font-weight:500}
 
-.sugg{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:9px;
-  text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);
-  border-radius:9px;cursor:pointer;font-size:13px;color:var(--txt2);line-height:1.5;
-  transition:border-color .13s,background .13s,transform .13s}
+.sugg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));
+  gap:10px;max-width:640px;margin:0 auto}
+.sugg{display:flex;flex-direction:column;text-align:left;padding:12px 15px;
+  background:var(--panel);border:1px solid var(--line);border-radius:9px;
+  cursor:pointer;font-size:12.5px;color:var(--txt2);line-height:1.5;
+  transition:border-color .15s,background .15s,transform .15s}
 .sugg:hover{border-color:var(--acc-line);background:var(--panel2);
-  transform:translateY(-1px)}
-.sugg b{display:block;color:var(--txt);font-weight:500;margin-bottom:3px;font-size:13px}
-.sugg .k{font-family:var(--mono);font-size:10.5px;color:var(--acc);opacity:.85}
+  transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.sugg-cmd{font-family:var(--mono);font-size:12.5px;font-weight:600;
+  color:var(--txt);margin-bottom:3px}
+.sugg .k{font-family:var(--mono);font-size:10.5px;color:var(--acc);opacity:.88}
 
 /* ---------- Ввод ---------- */
 .composer{flex-shrink:0;background:var(--panel);border-top:1px solid var(--line);
