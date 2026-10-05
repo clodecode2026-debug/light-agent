@@ -54,6 +54,70 @@ def main_test() -> int:
     r = c.get("/static/app.js")
     check("GET /static/app.js", r.status_code == 200, str(r.status_code))
 
+    # ---------- PWA ----------
+    section("PWA (установка как приложение)")
+    r = c.get("/manifest.json")
+    ok_m = r.status_code == 200
+    check("GET /manifest.json", ok_m, str(r.status_code))
+    if ok_m:
+        check("Content-Type манифеста",
+              "manifest" in r.headers.get("content-type", ""),
+              r.headers.get("content-type", "?"))
+        mf = r.json()
+        check("manifest: display standalone",
+              mf.get("display") == "standalone", str(mf.get("display")))
+        check("manifest: есть name и short_name",
+              bool(mf.get("name")) and bool(mf.get("short_name")))
+        check("manifest: start_url и scope",
+              mf.get("start_url") == "/" and mf.get("scope") == "/")
+        icons = mf.get("icons", [])
+        check("manifest: есть иконка 192",
+              any(i.get("sizes") == "192x192" for i in icons), str(len(icons)))
+        check("manifest: есть иконка 512",
+              any(i.get("sizes") == "512x512" for i in icons))
+        check("manifest: есть maskable (Android)",
+              any(i.get("purpose") == "maskable" for i in icons))
+        check("manifest: theme_color задан", bool(mf.get("theme_color")))
+        check("manifest: есть шорткаты", len(mf.get("shortcuts", [])) >= 3)
+
+    r = c.get("/static/sw.js")
+    check("GET /static/sw.js", r.status_code == 200, str(r.status_code))
+    if r.status_code == 200:
+        sw = r.text
+        check("sw: регистрирует install/activate",
+              "addEventListener('install'" in sw and
+              "addEventListener('activate'" in sw)
+        check("sw: перехватывает fetch", "addEventListener('fetch'" in sw)
+        check("sw: НЕ кэширует API", "/api/" in sw and "return;" in sw)
+        check("sw: есть fallback для офлайна", "Нет связи" in sw)
+
+    r = c.get("/static/icons/icon-192.png")
+    check("иконка 192 отдаётся", r.status_code == 200 and
+          r.headers.get("content-type") == "image/png",
+          f"{r.status_code} {r.headers.get('content-type')}")
+
+    r = c.get("/static/icons/icon-512.png")
+    check("иконка 512 отдаётся", r.status_code == 200, str(r.status_code))
+
+    r = c.get("/static/icons/maskable-512.png")
+    check("maskable-иконка отдаётся", r.status_code == 200, str(r.status_code))
+
+    r = c.get("/")
+    check("Service-Worker-Allowed заголовок",
+          r.headers.get("service-worker-allowed") == "/",
+          str(r.headers.get("service-worker-allowed")))
+    check("Cache-Control: no-cache на главной",
+          "no-cache" in r.headers.get("cache-control", ""),
+          str(r.headers.get("cache-control")))
+    html = r.text
+    check("в HTML есть link на манифест",
+          'rel="manifest"' in html)
+    check("в HTML есть apple-touch-icon",
+          "apple-touch-icon" in html)
+    check("в HTML viewport-fit=cover (безопасные зоны)",
+          "viewport-fit=cover" in html)
+    check("в HTML есть кнопка установки", 'id="bInstall"' in html)
+
     r = c.get("/api/status")
     d = r.json() if r.status_code == 200 else {}
     check("GET /api/status", r.status_code == 200 and "providers" in d,
