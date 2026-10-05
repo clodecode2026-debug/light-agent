@@ -53,7 +53,15 @@
       <div class="grow"></div>
       <button class="icon ghost" onclick="newSession()" title="Новая сессия">＋</button>
     </div>
-    <div class="side-scroll" style="max-height:180px" id="sessList"></div>
+    <div class="side-scroll" style="max-height:130px" id="sessList"></div>
+
+    <div class="side-head" style="border-top:1px solid var(--line);border-bottom:none">
+      Секреты
+      <div class="grow"></div>
+      <button class="icon ghost" onclick="openSecretDialog()" title="Добавить ключ">＋</button>
+    </div>
+    <div class="side-scroll" style="max-height:150px" id="vaultList"></div>
+
     <input type="file" id="filePick" multiple hidden onchange="doUpload(this.files)">
   </aside>
 
@@ -132,6 +140,32 @@
     <div class="row">
       <button onclick="mClose()">Отмена</button>
       <button class="primary" onclick="mOk()">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== Секрет: добавление и просмотр ====== -->
+<div class="modal" id="secModal">
+  <div class="mbox" style="width:min(440px,94vw)">
+    <h3 id="sTitle">Новый секрет</h3>
+    <div id="sForm">
+      <input id="sName" style="width:100%;margin-bottom:8px"
+             placeholder="Имя, например RENDER_API_KEY">
+      <input id="sValue" type="password" style="width:100%;margin-bottom:8px"
+             placeholder="Значение ключа" autocomplete="off">
+      <input id="sNote" style="width:100%"
+             placeholder="Заметка (необязательно)">
+      <div class="vshint">Ключ шифруется и хранится в базе, а не в файлах проекта.
+        В репозиторий не попадёт.</div>
+    </div>
+    <div id="sView" style="display:none">
+      <div class="vval" id="sShown"></div>
+      <div class="vshint">Это значение показывается один раз. Скопируйте его сейчас,
+        если нужно.</div>
+    </div>
+    <div class="row">
+      <button onclick="secClose()">Закрыть</button>
+      <button class="primary" id="sSave" onclick="saveSecret()">Сохранить</button>
     </div>
   </div>
 </div>
