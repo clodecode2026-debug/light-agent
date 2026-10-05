@@ -1,0 +1,105 @@
+/* Service worker: офлайн-оболочка + сетевой приоритет для API.
+ *
+ * Стратегия:
+ *  - статика (css/js/иконки) — cache-first: открывается мгновенно и работает
+ *    без сети, поэтому приложение запускается даже в метро или в горах;
+ *  - навигация (index.html) — network-first с откатом на кэш: свежий код
+ *    при наличии сети, но не белый экран без неё;
+ *  - API (chat/status/tree) — network-only: ответы агента нельзя кэшировать,
+ *    иначе интерфейс покажет старый ответ. При обрыве связи приложение
+ *    сообщает об этом самостоятельно.
+ *
+ * ВАЖНО: SW кэширует только статику. Данные агента (переписка, файлы)
+ * живут на сервере и в Supabase — здесь их нет.
+ */
+const VERSION = 'la-v2';
+// Ресурсы, которые кладём в кэш при установке.
+const ASSETS = [
+  '/',
+  '/static/app.css',
+  '/static/app.js',
+  '/static/manifest.json',
+  '/static/icons/icon-192.png',
+  '/static/icons/icon-512.png',
+  '/static/icons/icon-96.png',
+  '/static/icons/icon-48.png',
+  '/static/icons/favicon.ico',
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil((async () => {
+    const cache = await caches.open(VERSION);
+    // addAll падает целиком, если хоть один файл 404. Кладём по одному.
+    await Promise.all(ASSETS.map(async (url) => {
+      try {
+        await cache.add(new Request(url, { cache: 'reload' }));
+      } catch (err) {
+        console.warn('[sw] не закэширован', url, err);
+      }
+    }));
+    self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil((async () => {
+    // Удаляем старые версии кэша
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;   // POST (чат) не перехватываем
+
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  // API всегда идёт в сеть: свежесть важнее офлайна
+  if (url.pathname.startsWith('/api/') ||
+      url.pathname.startsWith('/admin/') ||
+      url.pathname.startsWith('/health')) {
+    return;
+  }
+
+  // Навигация: сначала сеть, при отказе — кэш
+  if (req.mode === 'navigate') {
+    e.respondWith((async () => {
+      try {
+        const fresh = await fetch(req);
+        const cache = await caches.open(VERSION);
+        cache.put('/', fresh.clone());
+        return fresh;
+      } catch (err) {
+        const cache = await caches.open(VERSION);
+        const cached = await cache.match('/') || await cache.match('/static/app.css');
+        return cached || new Response(
+          '<h1>Нет связи</h1><p>Откройте приложение при подключении к сети.</p>',
+          { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
+    })());
+    return;
+  }
+
+  // Статика: сначала кэш, потом сеть
+  e.respondWith((async () => {
+    const cache = await caches.open(VERSION);
+    const cached = await cache.match(req);
+    if (cached) {
+      // Обновляем кэш в фоне, но отдаём мгновенно
+      fetch(req).then(r => {
+        if (r && r.ok) cache.put(req, r.clone());
+      }).catch(() => {});
+      return cached;
+    }
+    try {
+      const fresh = await fetch(req);
+      if (fresh && fresh.ok) cache.put(req, fresh.clone());
+      return fresh;
+    } catch (err) {
+      return new Response('', { status: 504, statusText: 'offline' });
+    }
+  })());
+});
