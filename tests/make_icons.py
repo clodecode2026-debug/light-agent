@@ -3,6 +3,9 @@
 Рисует PNG вручную: zlib + struct. Ни PIL, ни ImageMagick не нужны —
 важно, чтобы скрипт работал на любой машине.
 
+Палитра — из оригинального Claude Code: терракотовый акцент #d77757
+на тёплом тёмном фоне #141413.
+
 Запуск:  python tests/make_icons.py
 """
 import struct
@@ -12,9 +15,12 @@ from pathlib import Path
 OUT = Path("web/static/icons")
 OUT.mkdir(parents=True, exist_ok=True)
 
-BG = (26, 32, 44)        # тёмно-синий фон
-ACCENT = (124, 156, 255)  # голубой акцент
-DARK = (13, 15, 20)      # почти чёрный
+# Цвета из палитры Claude Code
+BG_TOP = (26, 26, 25)      # тёплый тёмный
+BG_BOT = (16, 16, 15)
+ACCENT = (215, 119, 87)   # терракотовый
+ACCENT_HI = (224, 138, 107)
+DOT = (250, 249, 245)     # почти белый
 
 
 def png(width: int, height: int, pixels: bytes) -> bytes:
@@ -36,15 +42,16 @@ def png(width: int, height: int, pixels: bytes) -> bytes:
 
 
 def draw(size: int, rounded: bool, maskable: bool = False) -> bytes:
-    """Рисует иконку: тёмный фон, голубая рамка, точка-«лампа»."""
+    """Иконка в духе Claude: тёплый фон, терракотовое кольцо, белая точка."""
     px = bytearray(size * size * 4)
     r = size * 0.22 if rounded else 0  # радиус скругления
     cx = cy = size / 2
 
-    # Рамка-индикатор и точка по центру
-    ring_outer = size * 0.30
-    ring_inner = size * 0.20
-    dot_r = size * (0.085 if maskable else 0.10)
+    # Размеры элементов. Для maskable всё уменьшено: Android обрезает края.
+    scale = 0.78 if maskable else 1.0
+    ring_outer = size * 0.30 * scale
+    ring_inner = size * 0.20 * scale
+    dot_r = size * (0.085 if maskable else 0.105) * scale
 
     for y in range(size):
         for x in range(size):
@@ -54,7 +61,6 @@ def draw(size: int, rounded: bool, maskable: bool = False) -> bytes:
 
             # Фон со скруглением
             if r:
-                # Проверяем, внутри ли скруглённый прямоугольник
                 ox = max(abs(dx) - (size / 2 - r), 0)
                 oy = max(abs(dy) - (size / 2 - r), 0)
                 inside = (ox * ox + oy * oy) <= r * r
@@ -65,16 +71,21 @@ def draw(size: int, rounded: bool, maskable: bool = False) -> bytes:
                 px[i:i + 4] = bytes((0, 0, 0, 0))
                 continue
 
-            color = BG
+            # Вертикальный градиент фона - как в оригинале
+            t = y / max(size - 1, 1)
+            color = tuple(int(BG_TOP[k] + (BG_BOT[k] - BG_TOP[k]) * t)
+                          for k in range(3))
+
             # Кольцо
             if ring_inner <= dist <= ring_outer:
                 color = ACCENT
+                # Верхняя дуга светлее - блик, как у значка Claude
+                if dy < -size * 0.06:
+                    color = ACCENT_HI
+
             # Центральная точка
             if dist <= dot_r:
-                color = (255, 255, 255) if not maskable else ACCENT
-            # Верхняя дуга кольца делает «лампу» живой
-            elif ring_inner <= dist <= ring_outer and dy < -size * 0.06:
-                color = (168, 200, 255)
+                color = DOT if not maskable else ACCENT
 
             px[i:i + 4] = bytes((*color, 255))
 
