@@ -17,6 +17,11 @@ from app import agent, config, main, memory, tools  # noqa: E402
 WS = config.WORKSPACE
 PASS, FAIL = [], []
 
+# Токен админа для проверки защищённых ручек. Подставляем в конфиг,
+# чтобы тесты не зависели от того, что задано в окружении на машине.
+TEST_TOKEN = "test-admin-token-for-checks"
+config.ADMIN_TOKEN = TEST_TOKEN
+
 
 def check(name: str, cond: bool, detail: str = "") -> None:
     (PASS if cond else FAIL).append(name)
@@ -281,7 +286,87 @@ def main_test() -> int:
     r = c.post("/api/reset", json={"session_id": s})
     check("POST /api/reset", r.status_code == 200, str(r.status_code))
 
-    # ---------- Уборка рабочей папки ----------
+    # ---------- Секреты и инфраструктура ----------
+    section("Секреты и инфраструктура")
+    from app import infra, vault
+
+    st = infra.status()
+    check("хранилище секретов доступно", st["vault"]["enabled"], str(st))
+    check("ключ Render на месте", st["render"], str(st))
+    check("Management API настроен", st["management_api"], str(st))
+
+    # Шифрование
+    probe = "rnd_probe_value_9911"
+    enc = vault.encrypt(probe)
+    check("шифрование обратимо", vault.decrypt(enc) == probe)
+    check("шифротекст не содержит исходного", probe not in enc)
+    check("шифротекст — Fernet", enc.startswith("gAAAA"), enc[:20])
+    check("одинаковые значения шифруются по-разному",
+          vault.encrypt("x") != vault.encrypt("x"))
+
+    # Валидация имён
+    for bad_name in ("mykey", "ADMIN_TOKEN", "плохое имя", ""):
+        valid, _ = vault._valid_name(bad_name)
+        check(f"имя отклонено: {bad_name or '(пусто)'}", not valid)
+    check("имя RENDER_API_KEY принято", vault._valid_name("RENDER_API_KEY")[0])
+
+    # CRUD через API
+    SNAME = "RENDER_TEST_KEY"
+    vault.delete_secret(SNAME)
+    r = c.post("/admin/vault", json={"name": SNAME, "value": probe,
+                                     "note": "тест"},
+               headers={"Authorization": "Bearer " + TEST_TOKEN})
+    check("POST /admin/vault", r.status_code == 200, r.text[:120])
+
+    r = c.get("/api/vault")
+    names = [s["name"] for s in r.json().get("secrets", [])]
+    check("GET /api/vault показывает секрет", SNAME in names, str(names))
+    check("в ответе нет значений",
+          all("value" not in s for s in r.json().get("secrets", [])))
+
+    # В базе лежит шифротекст
+    client = vault._get_client()
+    if client is not None:
+        raw = (client.table(vault.SECRETS_TABLE)
+               .select("value").eq("name", SNAME).limit(1).execute())
+        stored = (raw.data or [{}])[0].get("value", "")
+        check("в базе шифротекст, а не открытый ключ",
+              probe not in stored and stored.startswith("gAAAA"))
+
+    r = c.post("/admin/vault", json={"name": "mykey", "value": "x"},
+               headers={"Authorization": "Bearer " + TEST_TOKEN})
+    check("имя без префикса отклонено", r.status_code == 400, str(r.status_code))
+
+    r = c.post("/admin/vault", json={"name": SNAME, "value": "x"})
+    check("vault без токена -> 401", r.status_code == 401, str(r.status_code))
+
+    r = c.delete("/admin/vault", params={"name": SNAME},
+                 headers={"Authorization": "Bearer " + TEST_TOKEN})
+    check("DELETE /admin/vault", r.status_code == 200, r.text[:100])
+    r = c.get("/api/vault")
+    check("после удаления секрета нет",
+          SNAME not in [s["name"] for s in r.json().get("secrets", [])])
+
+    # Защита http_request
+    for bad_url in ("http://api.render.com/v1/services",
+                    "https://localhost/admin",
+                    "https://169.254.169.254/latest/meta-data/"):
+        out = infra.tool_http_request("GET", bad_url)
+        check(f"http_request блокирует {bad_url[:34]}",
+              "Только https" in out or "заблокирован" in out, out[:60])
+
+    # Инструменты агента
+    spec_names = [t["function"]["name"] for t in tools.build_tools()]
+    for need in ("secret_set", "secret_list", "secret_delete",
+                 "infra_services", "infra_env", "infra_deploy",
+                 "infra_deploy_status", "infra_logs", "infra_create",
+                 "http_request"):
+        check(f"инструмент {need} зарегистрирован", need in spec_names)
+        check(f"{need} в реестре вызовов", need in tools._REGISTRY)
+
+    check("инструментов >= 26", len(spec_names) >= 26, str(len(spec_names)))
+
+    # ---------- Уборка ----------
     shutil.rmtree(WS / "t_dir", ignore_errors=True)
     (WS / "t_pic.png").unlink(missing_ok=True)
 
