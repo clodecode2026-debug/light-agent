@@ -34,9 +34,12 @@ SECRETS_TABLE = "agent_secrets"
 
 # Префиксы ключей, которые хранить можно. Всё остальное отклоняется,
 # чтобы агент случайно не засунул в базу мусор.
+# AGENT_ тоже разрешён: модели естественно называть «AGENT_API_KEY»,
+# и без этого префикса агент путается и подставляет другие имена.
 ALLOWED_PREFIXES = (
     "RENDER_", "GITHUB_", "VERCEL_", "AWS_", "SUPABASE_",
-    "OPENROUTER_", "GROQ_", "GEMINI_", "AG_",
+    "OPENROUTER_", "GROQ_", "GEMINI_", "AG_", "AGENT_",
+    "ANTHROPIC_", "DB_", "API_",
 )
 
 # Явный запрет: эти имена нельзя перезаписывать, иначе агент
@@ -179,7 +182,9 @@ def _valid_name(name: str) -> tuple[bool, str]:
         return False, "Имя может содержать только латиницу, цифры, _ и -"
     if not name.startswith(ALLOWED_PREFIXES):
         return False, ("Имя должно начинаться с одного из: "
-                       + ", ".join(ALLOWED_PREFIXES))
+                       + ", ".join(ALLOWED_PREFIXES)
+                       + ". Например: RENDER_API_KEY, GITHUB_TOKEN, "
+                         "AGENT_API_KEY")
     return True, ""
 
 
