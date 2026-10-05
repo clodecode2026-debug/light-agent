@@ -1,10 +1,57 @@
+/* ============================================================================
+   ПАЛИТРА
+   Взята из настоящего Claude Code 2.1.289: цвета извлечены из его бандла
+   (105 МБ linux-x64 пакет), а не подобраны на глаз. Главное — терракотовый
+   акцент #d77757 и тёплый фон #141413 вместо синего и холодного.
+
+   Источник: npm @anthropic-ai/claude-code-linux-x64, файл package/claude
+   ========================================================================== */
 :root{
-  --bg:#0d0f14; --bg2:#12151c; --panel:#161a22; --panel2:#1c212b;
-  --line:#252b36; --line2:#323a48;
-  --txt:#e8eaed; --txt2:#b6bcc8; --dim:#7d8595;
-  --acc:#7c9cff; --acc-d:#5b7cff; --ok:#4ec98a; --warn:#e0b341;
-  --err:#ef6f6f; --code:#e6edf3;
-  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  /* Фоны — тёплые, как в оригинале */
+  --bg:#141413;          /* основной фон, был #0d0f14 */
+  --bg2:#1a1a19;         /* чуть светлее для полей ввода */
+  --panel:#1e1e1c;       /* панели: шапка, сайдбар, файл-панель */
+  --panel2:#262624;      /* вложенные элементы, кнопки */
+
+  /* Текст */
+  --txt:#e2e8f0;         /* основной, из оригинала */
+  --txt2:#b6bcc8;
+  --dim:#64748b;         /* приглушённый, из оригинала */
+  --faint:#4a5568;
+
+  /* Границы */
+  --line:#2f2f2c;
+  --line2:#3d3d39;
+
+  /* Акценты — терракотовый как в Claude */
+  --acc:#d77757;         /* ГЛАВНЫЙ акцент, из оригинала */
+  --acc-hi:#e08a6b;      /* светлее при наведении */
+  --acc-dim:rgba(215,119,87,.13);
+  --acc-line:rgba(215,119,87,.35);
+
+  /* Служебные цвета — из оригинала */
+  --ok:#5a9e6f;
+  --warn:#f59e0b;        /* жёлтый оригинала */
+  --err:#ef4444;         /* красный оригинала */
+  --info:#5b8ac9;
+
+  /* Роли инструментов — как в оригинале */
+  --tool-read:#7aa2c4;   /* Read — спокойный синий */
+  --tool-write:#5a9e6f;  /* Write — зелёный */
+  --tool-edit:#c08a4e;   /* Edit — янтарный */
+  --tool-bash:#d77757;   /* Bash — терракотовый, главный акцент */
+  --tool-search:#9b7bc4; /* поиск — фиолетовый */
+  --tool-net:#5b8ac9;    /* сеть */
+
+  /* Diff — зелёный добавление, красный удаление */
+  --diff-add:#3f7a4e;
+  --diff-del:#a63c3c;
+
+  --code:#e2e8f0;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,
+         "Liberation Mono","Courier New",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+         "Helvetica Neue",Arial,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -22,8 +69,9 @@ button{font-family:inherit;font-size:13px;color:var(--txt);background:var(--pane
 button:hover{border-color:var(--line2);background:#232935}
 button:active{transform:translateY(1px)}
 button:disabled{opacity:.45;cursor:not-allowed;transform:none}
-button.primary{background:var(--acc-d);border-color:var(--acc-d);color:#fff;font-weight:500}
-button.primary:hover{background:#4d6ef5;border-color:#4d6ef5}
+button.primary{background:var(--acc);border-color:var(--acc);color:#1a1207;
+  font-weight:500}
+button.primary:hover{background:var(--acc-hi);border-color:var(--acc-hi)}
 button.ghost{background:transparent;border-color:transparent;color:var(--dim)}
 button.ghost:hover{background:var(--panel2);color:var(--txt)}
 button.icon{padding:5px 8px;font-size:14px;line-height:1}
@@ -42,18 +90,31 @@ header{
   height:46px;flex-shrink:0;display:flex;align-items:center;gap:10px;
   padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);
 }
-.logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;
+.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;
   letter-spacing:-.01em}
-.logo .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);
-  box-shadow:0 0 8px rgba(78,201,138,.6)}
-.logo .dot.busy{background:var(--warn);box-shadow:0 0 8px rgba(224,179,65,.6);
+.logo .name{color:var(--txt)}
+/* Марка-иконка в терракотовом, как логотип Claude */
+.logo .mark,.welcome h2 .mark{
+  width:18px;height:18px;border-radius:5px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--acc) 0%,#c0603f 100%);
+  box-shadow:0 1px 3px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.15);
+  position:relative;
+}
+.logo .mark::after,.welcome h2 .mark::after{
+  content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:6px;height:6px;border-radius:50%;background:#faf9f5;
+}
+.logo .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 6px rgba(90,158,111,.6)}
+.logo .dot.busy{background:var(--warn);box-shadow:0 0 6px rgba(245,158,11,.6);
   animation:pulse 1.1s ease-in-out infinite}
-.logo .dot.err{background:var(--err);box-shadow:0 0 8px rgba(239,111,111,.6)}
+.logo .dot.err{background:var(--err);box-shadow:0 0 6px rgba(239,68,68,.6)}
 @keyframes pulse{50%{opacity:.35}}
 .sep{width:1px;height:20px;background:var(--line)}
 .badge{font-size:11px;color:var(--dim);background:var(--bg2);border:1px solid var(--line);
-  padding:2px 8px;border-radius:20px;white-space:nowrap;cursor:default}
-.badge.ok{color:var(--ok);border-color:#1e4634}
+  padding:2px 8px;border-radius:20px;white-space:nowrap;cursor:default;
+  font-family:var(--mono)}
+.badge.ok{color:var(--ok);border-color:#2a3f31}
 .badge.bad{color:var(--err);border-color:#4a2525}
 .grow{flex:1}
 
@@ -75,7 +136,8 @@ header{
 .tnode{display:flex;align-items:center;gap:5px;padding:3px 6px;border-radius:5px;
   cursor:pointer;white-space:nowrap;overflow:hidden}
 .tnode:hover{background:var(--panel)}
-.tnode.sel{background:var(--acc-d);color:#fff}
+.tnode.sel{background:var(--acc-dim);color:var(--acc-hi);
+  box-shadow:inset 2px 0 0 var(--acc)}
 .tnode .nm{overflow:hidden;text-overflow:ellipsis}
 .tnode .sz{margin-left:auto;font-size:10px;color:var(--dim);flex-shrink:0}
 .tnode.sel .sz{color:#dfe6ff}
@@ -86,7 +148,8 @@ header{
 .sess{display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:6px;
   cursor:pointer;font-size:12.5px;color:var(--txt2)}
 .sess:hover{background:var(--panel)}
-.sess.sel{background:var(--acc-d);color:#fff}
+.sess.sel{background:var(--acc-dim);color:var(--acc-hi);
+  box-shadow:inset 2px 0 0 var(--acc)}
 .sess .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ---------- Центр ---------- */
@@ -94,22 +157,14 @@ header{
   position:relative}
 .chat{flex:1;overflow-y:auto;padding:20px 0;min-height:0}
 .chat-inner{max-width:780px;margin:0 auto;padding:0 24px}
-.welcome{text-align:center;padding:56px 20px;color:var(--dim)}
-.welcome h2{color:var(--txt);font-size:20px;font-weight:600;margin-bottom:8px;
-  letter-spacing:-.02em}
-.welcome .sub{font-size:13px;margin-bottom:26px}
-.sugg{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:9px;
-  text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);
-  border-radius:9px;cursor:pointer;font-size:13px;color:var(--txt2);line-height:1.5}
-.sugg:hover{border-color:var(--acc);background:var(--panel2)}
-.sugg b{display:block;color:var(--txt);font-weight:500;margin-bottom:3px;font-size:13px}
+/* Стили .welcome и .sugg — ниже, в секции «Welcome» рядом с палитрой */
 
 /* Сообщения */
 .msg{display:flex;gap:11px;margin-bottom:20px;animation:fade .18s ease-out}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .msg .av{width:25px;height:25px;border-radius:6px;flex-shrink:0;display:grid;
   place-items:center;font-size:11px;font-weight:600;margin-top:1px}
-.msg.u .av{background:var(--acc-d);color:#fff}
+.msg.u .av{background:var(--acc);color:#1a1207}
 .msg.a .av{background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
 .msg .body{flex:1;min-width:0}
 .bub{white-space:pre-wrap;word-wrap:break-word;line-height:1.7}
@@ -120,29 +175,61 @@ header{
 .meta .pill{background:var(--bg2);border:1px solid var(--line);padding:1px 7px;
   border-radius:5px;font-family:var(--mono);font-size:10.5px}
 
-/* Действия инструментов */
-.acts{margin:9px 0 0;border:1px solid var(--line);border-radius:8px;
+/* ---------- Действия инструментов ---------- */
+/* Оформление как в Claude Code: имя инструмента с цветовым кодом по роли,
+   аргументы приглушённым моноширинным. */
+.acts{margin:11px 0 0;border:1px solid var(--line);border-radius:8px;
   background:var(--bg2);overflow:hidden}
-.acts summary{cursor:pointer;padding:6px 10px;font-size:12px;color:var(--dim);
-  display:flex;align-items:center;gap:7px;list-style:none;user-select:none}
+.acts summary{cursor:pointer;padding:7px 11px;font-size:12px;color:var(--dim);
+  display:flex;align-items:center;gap:7px;list-style:none;user-select:none;
+  font-family:var(--mono)}
 .acts summary::-webkit-details-marker{display:none}
-.acts summary:hover{color:var(--txt2)}
-.acts summary .chev{transition:transform .15s;font-size:10px}
+.acts summary:hover{color:var(--txt2);background:var(--panel2)}
+.acts summary .chev{transition:transform .15s;font-size:9px}
 .acts[open] summary .chev{transform:rotate(90deg)}
-.act{padding:5px 10px 5px 26px;font-family:var(--mono);font-size:11.5px;
-  color:var(--txt2);border-top:1px solid var(--line);position:relative;
-  white-space:pre-wrap;word-break:break-word}
-.act .nm{color:var(--acc)}
-.act.err .nm{color:var(--err)}
+.acts summary .cnt{margin-left:auto;font-size:10.5px;color:var(--faint);
+  background:var(--panel);padding:1px 6px;border-radius:10px}
 
-/* Живой индикатор */
-.thinking{display:flex;align-items:center;gap:8px;color:var(--dim);font-size:13px;
+/* Строка одного вызова инструмента */
+.act{padding:4px 11px 4px 26px;font-family:var(--mono);font-size:12px;
+  color:var(--txt2);border-top:1px solid var(--line);position:relative;
+  white-space:pre-wrap;word-break:break-word;line-height:1.55}
+.act:first-child{border-top:none}
+.act .nm{font-weight:600}
+.act .ar{color:var(--faint)}
+
+/* Цвета имён инструментов по роли — как в оригинале */
+.act.r-read   .nm{color:var(--tool-read)}
+.act.r-write  .nm{color:var(--tool-write)}
+.act.r-edit   .nm{color:var(--tool-edit)}
+.act.r-bash   .nm{color:var(--tool-bash)}
+.act.r-search .nm{color:var(--tool-search)}
+.act.r-net    .nm{color:var(--tool-net)}
+.act.r-other  .nm{color:var(--txt2)}
+.act.err .nm{color:var(--err)}
+.act .el{color:var(--acc);opacity:.8}
+
+/* Живой индикатор — как «esc to interrupt» в оригинале */
+.thinking{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:13px;
   padding:3px 0}
 .thinking .spin{width:12px;height:12px;border:2px solid var(--line2);
   border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-.thinking .step{font-family:var(--mono);font-size:11px;color:var(--dim);
+.thinking .step{font-family:var(--mono);font-size:11px;color:var(--faint);
   margin-left:auto}
+/* Мигающий курсор в духе терминала */
+.thinking .caret{display:inline-block;width:7px;height:14px;background:var(--acc);
+  vertical-align:-2px;animation:blink 1.05s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* Diff — зелёным добавление, красным удаление */
+.diffline{font-family:var(--mono);font-size:12px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;padding:1px 10px;border-radius:4px}
+.diff-add{background:rgba(63,122,78,.16);color:#a8d5b5;
+  box-shadow:inset 2px 0 0 var(--diff-add)}
+.diff-del{background:rgba(166,60,60,.16);color:#e0a3a3;
+  box-shadow:inset 2px 0 0 var(--diff-del)}
+.diff-h{color:var(--dim);font-weight:600;padding-top:5px;background:none}
 
 /* Markdown */
 .md>*+*{margin-top:9px}
@@ -166,11 +253,38 @@ header{
 .md hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 .codewrap{position:relative}
 
-/* Подсветка синтаксиса */
-.tk-k{color:#c586c0}.tk-s{color:#6a9955}.tk-n{color:#b5cea8}
-.tk-c{color:#6a9955;font-style:italic}.tk-f{color:#dcdcaa}
-.tk-s2{color:#ce9178}.tk-p{color:#569cd6}.tk-t{color:#4ec9b0}
-.tk-o{color:#d4d4d4}.tk-v{color:#9cdcfe}.tk-b{color:#569cd6;font-weight:600}
+/* Подсветка синтаксиса — палитра под терракотовый акцент */
+.tk-k{color:#c08a6a}   /* ключевые слова */
+.tk-s{color:#7d9a6e}   /* строки */
+.tk-n{color:#b5a08a}   /* числа */
+.tk-c{color:#5c6b52;font-style:italic} /* комментарии */
+.tk-f{color:#dcb88a}   /* функции */
+.tk-s2{color:#c98a6a}  /* строки-обёртки */
+.tk-p{color:#7aa2c4}   /* свойства/параметры */
+.tk-t{color:#9b7bc4}   /* типы */
+.tk-o{color:#c9c5bd}   /* операторы */
+.tk-v{color:#9cc4d8}   /* переменные */
+.tk-b{color:#d77757;font-weight:600} /* важное */
+
+/* ---------- Welcome ---------- */
+.welcome{text-align:center;padding:52px 20px;color:var(--dim)}
+.welcome h2{color:var(--txt);font-size:21px;font-weight:600;margin-bottom:10px;
+  letter-spacing:-.02em;display:flex;align-items:center;justify-content:center;
+  gap:10px}
+.welcome h2 .mark{width:22px;height:22px;border-radius:6px;flex-shrink:0}
+.welcome .sub{font-size:13px;margin-bottom:8px}
+.welcome .hintline{font-family:var(--mono);font-size:11.5px;color:var(--faint);
+  margin-bottom:26px}
+.welcome .hintline b{color:var(--acc);font-weight:500}
+
+.sugg{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:9px;
+  text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);
+  border-radius:9px;cursor:pointer;font-size:13px;color:var(--txt2);line-height:1.5;
+  transition:border-color .13s,background .13s,transform .13s}
+.sugg:hover{border-color:var(--acc-line);background:var(--panel2);
+  transform:translateY(-1px)}
+.sugg b{display:block;color:var(--txt);font-weight:500;margin-bottom:3px;font-size:13px}
+.sugg .k{font-family:var(--mono);font-size:10.5px;color:var(--acc);opacity:.85}
 
 /* ---------- Ввод ---------- */
 .composer{flex-shrink:0;background:var(--panel);border-top:1px solid var(--line);
