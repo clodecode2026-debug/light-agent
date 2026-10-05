@@ -217,6 +217,16 @@ header{
   flex-shrink:0;flex-wrap:wrap}
 
 /* ---------- Прочее ---------- */
+/* Кнопка установки: ненавязчиво подсвечивает себя, но не мигает */
+button.pulse{position:relative;color:var(--acc)}
+button.pulse::after{
+  content:'';position:absolute;inset:-1px;border-radius:8px;
+  border:1px solid var(--acc);opacity:.5;animation:halo 2s ease-out infinite;
+  pointer-events:none;
+}
+@keyframes halo{0%{transform:scale(1);opacity:.5}70%{transform:scale(1.14);opacity:0}
+100%{transform:scale(1.14);opacity:0}}
+
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;
   align-items:center;justify-content:center;z-index:100}
 .modal.show{display:flex}
@@ -236,9 +246,133 @@ header{
 .toast.show{opacity:1}
 
 @media(max-width:1100px){.fpanel{width:55%}}
-@media(max-width:820px){
-  .sidebar{position:fixed;left:0;top:46px;bottom:0;z-index:50;
-    box-shadow:4px 0 22px rgba(0,0,0,.5)}
-  .fpanel{position:fixed;right:0;top:46px;bottom:0;width:100%;z-index:50}
-  .chat-inner,.composer-inner{padding-left:14px;padding-right:14px}
+/* ============================================================================
+   МОБИЛЬНАЯ ВЁРСТКА
+   Три контрольные ширины: телефон (до 700), планшет (до 1000), десктоп.
+   Ключевое: на телефоне панели становятся оверлеями с затемнением,
+   а не занимают место — иначе чату остаётся 300 px.
+   ========================================================================== */
+
+/* --- Базовые безопасные зоны (iPhone с чёлкой) --- */
+@supports (padding: max(0px)) {
+  header{padding-left:max(14px,env(safe-area-inset-left));
+         padding-right:max(14px,env(safe-area-inset-right))}
+  .composer{padding-left:max(24px,env(safe-area-inset-left));
+            padding-right:max(24px,env(safe-area-inset-right));
+            padding-bottom:max(14px,env(safe-area-inset-bottom))}
+  .chat{padding-left:env(safe-area-inset-left);
+        padding-right:env(safe-area-inset-right)}
+  .sidebar,.fpanel{padding-bottom:env(safe-area-inset-bottom)}
+}
+
+/* --- Планшет: панель файлов уже, отступы скромнее --- */
+@media(max-width:1000px){
+  .fpanel{width:52%}
+  .chat-inner,.composer-inner{padding-left:16px;padding-right:16px}
+}
+
+/* --- Телефон в портретной ориентации --- */
+@media(max-width:700px){
+  body{font-size:15px}
+  header{height:52px;gap:7px}
+  header .badge{font-size:10px;padding:2px 6px}
+  /* На телефоне скрываем второстепенные бейджи: заголовок важнее */
+  #bMem,#bSto{display:none}
+  #selModel{max-width:120px;font-size:11px;padding:5px 6px}
+  #bNet{font-size:10px;padding:2px 6px}
+
+  .chat{padding:12px 0}
+  .chat-inner{padding:0 12px}
+  .welcome{padding:32px 12px}
+  .welcome h2{font-size:18px}
+  .welcome .sub{font-size:12.5px;margin-bottom:20px}
+  .sugg{grid-template-columns:1fr;padding:11px 13px;font-size:12.5px}
+
+  .msg{gap:9px;margin-bottom:16px}
+  .msg .av{width:23px;height:23px;font-size:10px}
+  .msg.u .bub{padding:8px 11px}
+  .meta{font-size:10.5px;gap:6px}
+
+  /* Панели как оверлеи с подложкой */
+  .sidebar{position:fixed;left:0;top:0;bottom:0;width:min(84vw,300px);
+    z-index:60;box-shadow:8px 0 30px rgba(0,0,0,.6);
+    padding-top:env(safe-area-inset-top)}
+  .sidebar.collapsed{margin-left:-100vw}
+  .fpanel{position:fixed;left:0;right:0;top:0;bottom:0;width:100%;
+    z-index:60;box-shadow:0 -8px 30px rgba(0,0,0,.6);
+    padding-top:env(safe-area-inset-top)}
+
+  /* Затемнение под открытой панелью + клик по нему закрывает */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:55;
+    display:none;animation:fade .15s ease-out}
+  .scrim.on{display:block}
+
+  /* Панель файла на телефоне: заголовок + содержимое + кнопки снизу */
+  .fp-head{padding:calc(10px + env(safe-area-inset-top)) 12px 10px}
+  .fp-body{max-height:none}
+  .fp-foot{padding:9px 12px calc(9px + env(safe-area-inset-bottom));
+    background:var(--panel)}
+
+  /* Поле ввода: крупная зона нажатия, не ниже 44px */
+  .composer{padding:9px 12px calc(10px + env(safe-area-inset-bottom))}
+  .composer-inner{max-width:none}
+  .inrow{padding:6px 6px 6px 12px;border-radius:12px}
+  .inrow textarea{font-size:16px;/* без этого iOS зумит при фокусе */
+    padding:6px 0;min-height:24px}
+  /* Кнопки отправки — пальцем, а не стилусом */
+  .inrow button{font-size:15px;padding:11px 14px;min-width:44px;
+    min-height:44px;justify-content:center}
+  #bSend{font-size:0;padding:0;width:44px}
+  #bSend::after{content:'➤';font-size:17px}
+  .hintbar{font-size:10px;justify-content:center;text-align:center}
+  .hintbar kbd{display:none}
+  #hintRight{display:none}
+
+  /* Отступ под «домашнюю» полоску iOS */
+  .foot-space{height:env(safe-area-inset-bottom)}
+}
+
+/* --- Очень узкие (iPhone SE 320px) --- */
+@media(max-width:360px){
+  .welcome h2{font-size:16px}
+  .att{font-size:10.5px}
+  .act{padding-left:18px;font-size:11px}
+}
+
+/* --- Телефон в альбомной ориентации: низкая высота --- */
+@media(max-height:500px) and (orientation:landscape){
+  header{height:44px}
+  .welcome{padding:18px 12px}
+  .welcome .sub,.chips{display:none}
+  .sugg{padding:9px 11px}
+  .composer{padding-top:7px}
+  .inrow textarea{min-height:20px;font-size:15px}
+  .inrow button{min-height:38px}
+}
+
+/* --- Указатель точный (мышь): убираем крупные зоны нажатия --- */
+@media(hover:hover) and (pointer:fine){
+  .inrow button{min-width:0;min-height:0;padding:7px 12px;font-size:13px}
+  #bSend{width:auto;font-size:13px;padding:7px 14px}
+  #bSend::after{content:none}
+}
+
+/* --- Отключаем анимации для людей, которым мешает --- */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;
+    transition-duration:.01ms !important}
+  .spin{animation:none}
+}
+
+/* --- Повышенный контраст --- */
+@media(prefers-contrast:more){
+  :root{--line:#4a5464;--dim:#a8b0bd;--txt2:#d4dae3}
+  .tnode:hover{background:#2a3140}
+}
+
+/* --- Печать: убираем лишнее --- */
+@media print{
+  header,.sidebar,.composer,.fpanel,.acts{display:none !important}
+  body{background:#fff;color:#000;height:auto;overflow:visible}
+  .bub{color:#000}
 }
