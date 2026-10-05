@@ -11,26 +11,33 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Agent">
 <link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/static/icons/icon-48.png" sizes="48x48">
-<link rel="apple-touch-icon" href="/static/icons/icon-180.png">
-<title>Agent — Light Code Assistant</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icons/claude-icon.png">
+<link rel="apple-touch-icon" href="/static/icons/claude-icon.png">
+<title>Claude Code — Research Preview</title>
+<link rel="stylesheet" href="/static/app.css?v=3.5">
 </head>
 <body>
 
 <header>
-  <button class="icon ghost" id="bSide" title="Панель проекта (Ctrl+B)">☰</button>
-  <div class="logo">
-    <span class="mark"></span>
-    <span class="name">Agent</span>
-    <span class="dot" id="dot"></span>
+  <div class="win-controls">
+    <span class="win-dot dot-red" title="Закрыть"></span>
+    <span class="win-dot dot-yellow" title="Свернуть"></span>
+    <span class="win-dot dot-green" title="Развернуть"></span>
   </div>
-  <span class="badge" id="bLLM">LLM…</span>
-  <span class="badge" id="bMem">память…</span>
-  <span class="badge" id="bSto">хранилище…</span>
+  <button class="icon ghost" id="bSide" title="Панель проекта (Ctrl+B)">☰</button>
+  <span class="dot" id="dot" title="Статус агента"></span>
+  <span class="badge" id="bProj" hidden>📁 default</span>
+
+  <div class="win-title" id="winTitle">
+    <img src="/static/icons/claude-icon.png" class="win-title-icon" alt="">
+    <span>claude-code — </span><span id="winTitleProject">default</span>
+  </div>
+
   <div class="grow"></div>
-  <button class="icon" id="bInstall" onclick="installApp()" title="Установить приложение" hidden>⬇</button>
-  <select id="selModel" title="Модель" style="max-width:190px"></select>
+  <span class="badge" id="bMem" title="Supabase память">память…</span>
+  <span class="badge" id="bLLM" title="Модель">LLM…</span>
+  <button class="icon ghost" id="bInstall" onclick="installApp()" title="Установить приложение" hidden>⬇</button>
+  <select id="selModel" title="Модель" style="max-width:160px;font-size:12px;padding:4px 8px"></select>
   <span class="badge" id="bNet" title="Соединение">офлайн</span>
 </header>
 
@@ -38,29 +45,45 @@
 
   <!-- ====== Левая панель ====== -->
   <aside class="sidebar" id="side">
+    <!-- Проекты -->
     <div class="side-head">
-      Проект
+      <span>📁 Проекты</span>
+      <div class="grow"></div>
+      <button class="icon ghost" onclick="newProjectPrompt()" title="Создать проект">＋</button>
+    </div>
+    <div class="proj-select-wrap">
+      <select id="projSelect" class="proj-dropdown" onchange="switchProject(this.value)">
+        <option value="default">default</option>
+      </select>
+    </div>
+
+    <!-- Диалоги / Сессии -->
+    <div class="side-head" style="border-top:1px solid var(--line);border-bottom:none">
+      <span>💬 Диалоги</span>
+      <div class="grow"></div>
+      <button class="icon ghost" onclick="newSession()" title="Новый диалог">＋</button>
+    </div>
+    <div class="side-scroll sess-scroll" id="sessList"></div>
+
+    <!-- Файлы проекта -->
+    <div class="side-head" style="border-top:1px solid var(--line);border-bottom:none">
+      <span id="filesHeadTitle">📄 Файлы проекта</span>
       <div class="grow"></div>
       <button class="icon ghost" onclick="newFolder()" title="Новая папка">＋</button>
       <button class="icon ghost" onclick="uploadPick()" title="Загрузить файл">⬆</button>
-      <button class="icon ghost" onclick="loadTree()" title="Обновить">⟳</button>
+      <button class="icon ghost" onclick="loadTree()" title="Обновить файлы">⟳</button>
     </div>
-    <div class="side-scroll">
+    <div class="side-scroll tree-scroll">
       <div class="tree" id="tree"></div>
     </div>
-    <div class="side-head" style="border-top:1px solid var(--line);border-bottom:none">
-      Сессии
-      <div class="grow"></div>
-      <button class="icon ghost" onclick="newSession()" title="Новая сессия">＋</button>
-    </div>
-    <div class="side-scroll" style="max-height:130px" id="sessList"></div>
 
+    <!-- Секреты -->
     <div class="side-head" style="border-top:1px solid var(--line);border-bottom:none">
-      Секреты
+      <span>🔐 Секреты</span>
       <div class="grow"></div>
       <button class="icon ghost" onclick="openSecretDialog()" title="Добавить ключ">＋</button>
     </div>
-    <div class="side-scroll" style="max-height:150px" id="vaultList"></div>
+    <div class="side-scroll" style="max-height:120px" id="vaultList"></div>
 
     <input type="file" id="filePick" multiple hidden onchange="doUpload(this.files)">
   </aside>
@@ -70,25 +93,49 @@
     <div class="chat" id="chat">
       <div class="chat-inner" id="chatInner">
         <div class="welcome" id="welcome">
-          <h2><span class="mark"></span>Agent</h2>
-          <div class="sub">Лёгкий ИИ-агент в облаке: код, файлы, проекты, поиск</div>
-          <div class="hintline">
-            <b>Ctrl+B</b> панель проекта · <b>Esc</b> прервать задачу ·
-            <b>🎤</b> голосовой ввод
+          <div class="claude-hero">
+            <div class="claude-symbol-wrap">
+              <img src="/static/icons/claude-icon.png" class="claude-symbol-img" width="88" height="88" alt="Claude Code">
+            </div>
+            <div class="claude-hero-text">
+              <h1 class="claude-title">Claude Code</h1>
+              <div class="claude-tag">RESEARCH PREVIEW CLI</div>
+            </div>
           </div>
-          <div style="display:grid;gap:9px;max-width:640px;margin:0 auto">
+
+          <div class="cli-card">
+            <div class="cli-line">
+              <span class="cli-prompt">$</span> <span class="cli-cmd">claude</span> <span class="cli-arg">&quot;Refactor cloud architecture and optimize tests&quot;</span>
+            </div>
+            <div class="cli-line">
+              <span class="cli-check">✓</span> <span class="cli-bold">Analyzed project structure</span> <span class="cli-dim">(4 files indexed)</span>
+            </div>
+            <div class="cli-line">
+              <span class="cli-arrow">&gt;</span> <span class="cli-dim">Generating solution...</span> <span class="cli-cursor">█</span>
+            </div>
+          </div>
+
+          <div class="hintline">
+            <b>Ctrl+B</b> панель проекта · <b>Esc</b> остановить задачу · <b>Каждая папка</b> сохраняется изолированно в Supabase
+          </div>
+
+          <div class="sugg-grid">
             <div class="sugg" data-q="Создай проект: спроси у меня имя и цель, затем сделай структуру папок и файлов">
-              <b>Создать проект</b>
-              <span class="k">make_dir → write_file</span> — агент сделает сам</div>
+              <div class="sugg-cmd">$ claude &quot;Создать структуру проекта&quot;</div>
+              <span class="k">make_dir → write_file — создание структуры</span>
+            </div>
             <div class="sugg" data-q="Покажи структуру проекта и объясни, что в каждом файле">
-              <b>Разобрать проект</b>
-              <span class="k">tree → read_file</span> — найдёт всё сам</div>
+              <div class="sugg-cmd">$ claude &quot;Разобрать файлы проекта&quot;</div>
+              <span class="k">tree → read_file — детальный анализ</span>
+            </div>
             <div class="sugg" data-q="Найди в интернете новости про ИИ-агентов за эту неделю и кратко суммируй">
-              <b>Поиск в интернете</b>
-              <span class="k">web_search</span> — актуальные данные</div>
+              <div class="sugg-cmd">$ claude &quot;Поиск свежих данных в сети&quot;</div>
+              <span class="k">web_search — поиск в реальном времени</span>
+            </div>
             <div class="sugg" data-q="Напиши Python-скрипт, который считает числа Фибоначчи до 100000 и сохраняет результат">
-              <b>Написать и запустить код</b>
-              <span class="k">write_file → run_python_file</span> — с проверкой</div>
+              <div class="sugg-cmd">$ claude &quot;Написать и протестировать код&quot;</div>
+              <span class="k">write_file → run_python_file — с проверкой</span>
+            </div>
           </div>
         </div>
       </div>
@@ -99,9 +146,15 @@
         <div class="attbar" id="attbar"></div>
         <div class="inrow">
           <textarea id="in" rows="1"
-            placeholder="Опишите задачу…  или нажмите 🎤 и продиктуйте"
+            placeholder="Опишите задачу…  или продиктуйте голосом"
             oninput="grow(this)" onkeydown="onKey(event)"></textarea>
-          <button class="icon" id="mic" onclick="toggleMic()" title="Голосовой ввод">🎤</button>
+          <button class="icon mic-btn" id="mic" onclick="toggleMic()" title="Голосовой ввод">
+            <svg class="mic-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" x2="12" y1="19" y2="22"/>
+            </svg>
+          </button>
           <button class="icon" id="bStop" onclick="stopRun()" title="Остановить (Esc)" hidden>■</button>
           <button class="primary" id="bSend" onclick="send()" title="Отправить">Отправить ↵</button>
         </div>
@@ -173,6 +226,6 @@
 <div id="drop">Отпустите файлы — загрузятся на сервер</div>
 <div class="toast" id="toast"></div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=3.4"></script>
 </body>
 </html>
