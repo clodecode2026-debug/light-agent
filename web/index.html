@@ -35,13 +35,15 @@
 
   <div class="grow"></div>
   <span class="badge" id="bMem" title="Supabase память">память…</span>
+  <span class="badge" id="bSto" title="S3 Диск">диск…</span>
   <span class="badge" id="bLLM" title="Модель">LLM…</span>
   <button class="icon ghost" id="bInstall" onclick="installApp()" title="Установить приложение" hidden>⬇</button>
-  <select id="selModel" title="Модель" style="max-width:160px;font-size:12px;padding:4px 8px"></select>
-  <span class="badge" id="bNet" title="Соединение">офлайн</span>
+  <select id="selModel" title="Модель" style="max-width:260px;font-size:12px;padding:4px 8px"></select>
+  <span class="badge ok" id="bNet" title="Соединение">онлайн</span>
 </header>
 
 <div class="layout">
+  <div class="scrim" id="scrim" onclick="closeAllPanels()"></div>
 
   <!-- ====== Левая панель ====== -->
   <aside class="sidebar" id="side">
@@ -50,6 +52,7 @@
       <span>📁 Проекты</span>
       <div class="grow"></div>
       <button class="icon ghost" onclick="newProjectPrompt()" title="Создать проект">＋</button>
+      <button class="icon ghost side-close-mobile" onclick="closeAllPanels()" title="Закрыть панель">✕</button>
     </div>
     <div class="proj-select-wrap">
       <select id="projSelect" class="proj-dropdown" onchange="switchProject(this.value)">
@@ -145,8 +148,14 @@
       <div class="composer-inner">
         <div class="attbar" id="attbar"></div>
         <div class="inrow">
+          <button class="icon ghost attach-btn" id="bAttach" onclick="pickChatFiles()" title="Прикрепить файл (Ctrl+U или вставка из буфера)">
+            <svg class="attach-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <input type="file" id="chatFilePick" multiple hidden onchange="handleChatFiles(this.files)">
           <textarea id="in" rows="1"
-            placeholder="Опишите задачу…  или продиктуйте голосом"
+            placeholder="Опишите задачу… прикрепите файлы или продиктуйте голосом"
             oninput="grow(this)" onkeydown="onKey(event)"></textarea>
           <button class="icon mic-btn" id="mic" onclick="toggleMic()" title="Голосовой ввод">
             <svg class="mic-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
