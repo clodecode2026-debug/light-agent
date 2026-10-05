@@ -20,6 +20,18 @@ def _env(key: str, default: str = "") -> str:
     return os.getenv(key, default).strip()
 
 
+def _ref_from_url() -> str:
+    """Достаёт ref проекта из SUPABASE_URL вида https://xxxx.supabase.co."""
+    url = os.getenv("SUPABASE_URL", "").strip()
+    if not url:
+        return ""
+    host = url.replace("https://", "").replace("http://", "")
+    host = host.split("/")[0]
+    if host.endswith(".supabase.co"):
+        return host[: -len(".supabase.co")]
+    return ""
+
+
 # ---------- LLM ----------
 AG_BASE_URL = _env("AG_BASE_URL", "https://agent-master-server.onrender.com/v1")
 AG_API_KEY = _env("AG_API_KEY")
@@ -39,6 +51,14 @@ ADMIN_TOKEN = _env("ADMIN_TOKEN", "dev-token")
 
 SUPABASE_URL = _env("SUPABASE_URL")
 SUPABASE_KEY = _env("SUPABASE_KEY")
+# Management API: нужен, чтобы агент мог сам создавать таблицы
+# (обычный клиент supabase не умеет DDL).
+SUPABASE_ACCESS_TOKEN = _env("SUPABASE_ACCESS_TOKEN")
+SUPABASE_PROJECT_REF = _env("SUPABASE_PROJECT_REF") or _ref_from_url()
+
+# Render: агент управляет деплоем через API
+RENDER_API_KEY = _env("RENDER_API_KEY")
+RENDER_OWNER_ID = _env("RENDER_OWNER_ID")
 
 S3_ENDPOINT = _env("S3_ENDPOINT", "https://gateway.storjshare.io")
 S3_ACCESS_KEY = _env("S3_ACCESS_KEY")
