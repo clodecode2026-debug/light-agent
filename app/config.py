@@ -1,4 +1,5 @@
 """Конфигурация из переменных окружения."""
+import contextvars
 import os
 from pathlib import Path
 
@@ -11,7 +12,34 @@ except Exception:
     pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+# Корневая папка для всех проектов. Каждый проект - подпапка внутри,
+# поэтому файлы разных проектов физически изолированы друг от друга.
 WORKSPACE = BASE_DIR / "workspace"
+
+# Контекстная переменная для изолированной работы потоков/сессий над разными проектами
+_project_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("current_project", default="default")
+CURRENT_PROJECT = "default"
+
+
+def set_current_project(name: str) -> str:
+    """Задаёт активный проект для текущего контекста/потока."""
+    global CURRENT_PROJECT
+    val = (name or "default").strip() or "default"
+    CURRENT_PROJECT = val
+    _project_ctx.set(val)
+    return val
+
+
+def get_current_project() -> str:
+    """Возвращает имя активного проекта текущего контекста."""
+    try:
+        val = _project_ctx.get()
+        if val:
+            return val
+    except Exception:
+        pass
+    return CURRENT_PROJECT or "default"
+
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -67,6 +95,33 @@ S3_BUCKET = _env("S3_BUCKET", "agent-files")
 S3_REGION = _env("S3_REGION", "us-east-1")
 
 WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+
+def project_dir(project: str = "") -> Path:
+    """Папка конкретного проекта внутри рабочей области.
+
+    Файлы разных проектов не пересекаются: project_dir("a") и
+    project_dir("b") — это разные подпапки. Так переключение проекта
+    в интерфейсе меняет набор файлов без перезапуска сервера.
+    """
+    name = (project or get_current_project() or "default").strip() or "default"
+    # Только безопасные символы: имя проекта не должно уйти из папки
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in name)
+    safe = safe.strip("-") or "default"
+    d = WORKSPACE / safe
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def use_project(name: str) -> Path:
+    """Переключает активный проект и возвращает его папку."""
+    set_current_project(name)
+    return project_dir(name)
+
+
+def current_workspace() -> Path:
+    """Папка активного проекта - её отдают инструментам."""
+    return project_dir(get_current_project())
 
 
 def memory_enabled() -> bool:
