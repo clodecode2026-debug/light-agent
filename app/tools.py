@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from . import config
+from . import infra as _infra
 
 WORKSPACE = config.WORKSPACE
 
@@ -528,6 +529,66 @@ def build_tools() -> list[dict]:
         _tool("cloud_upload", "Выгружает файл из рабочей папки в облачное хранилище Storj.",
               {"filename": {"type": "string", "description": "Имя файла в рабочей папке"}},
               ["filename"]),
+
+        # ---------- Секреты ----------
+        _tool("secret_set", "Сохраняет API-ключ в зашифрованное хранилище. "
+                            "Ключ НЕ попадает в файлы проекта и не утечёт в git. "
+                            "Имя должно начинаться с RENDER_, GITHUB_, VERCEL_, "
+                            "AWS_, SUPABASE_, OPENROUTER_, GROQ_, GEMINI_ или AG_.",
+              {"name": {"type": "string", "description": "Имя секрета, например RENDER_API_KEY"},
+               "value": {"type": "string", "description": "Само значение ключа"},
+               "note": {"type": "string", "description": "Заметка для себя, что это за ключ"}},
+              ["name", "value"]),
+        _tool("secret_list", "Показывает список сохранённых секретов. Значения не показывает.",
+              {}),
+        _tool("secret_delete", "Удаляет секрет из хранилища.",
+              {"name": {"type": "string"}}, ["name"]),
+
+        # ---------- Инфраструктура ----------
+        _tool("infra_services", "Показывает все сервисы на Render: id, адреса, репозитории.",
+              {}),
+        _tool("infra_env", "Управляет переменными окружения сервиса на Render. "
+                           "action=list показать, set добавить, delete удалить. "
+                           "secret=true - сохранить значение как секрет.",
+              {"service_id": {"type": "string", "description": "id сервиса из infra_services"},
+               "action": {"type": "string", "description": "list, set или delete"},
+               "name": {"type": "string", "description": "Имя переменной"},
+               "value": {"type": "string", "description": "Значение переменной"},
+               "secret": {"type": "boolean", "description": "Скрыть значение в интерфейсе"}},
+              ["service_id"]),
+        _tool("infra_deploy", "Запускает новый деплой сервиса на Render.",
+              {"service_id": {"type": "string"},
+               "clear_cache": {"type": "boolean", "description": "Сбросить кэш сборки"}},
+              ["service_id"]),
+        _tool("infra_deploy_status", "Показывает статус деплоя по его id.",
+              {"deploy_id": {"type": "string"}}, ["deploy_id"]),
+        _tool("infra_logs", "Показывает последние строки логов деплоя.",
+              {"deploy_id": {"type": "string"},
+               "tail": {"type": "integer", "description": "Сколько строк, по умолч. 60"}},
+              ["deploy_id"]),
+        _tool("infra_create", "Создаёт сервис на Render из GitHub-репозитория. "
+                              "Если API вернёт ошибку - создай через render.yaml.",
+              {"name": {"type": "string"},
+               "repo": {"type": "string", "description": "https://github.com/user/repo"},
+               "branch": {"type": "string"},
+               "plan": {"type": "string", "description": "free или starter"},
+               "build_command": {"type": "string"},
+               "start_command": {"type": "string"},
+               "owner_id": {"type": "string", "description": "id рабочего пространства Render"}},
+              ["name", "repo"]),
+
+        # ---------- HTTP ----------
+        _tool("http_request", "Делает HTTP-запрос к API облачного провайдера "
+                              "(Render, Vercel, GitHub, AWS). "
+                              "В заголовках пиши @NAME - значение секрета "
+                              "подставится само, ключ не попадёт в файлы.",
+              {"method": {"type": "string", "description": "GET, POST, PUT, PATCH, DELETE"},
+               "url": {"type": "string", "description": "Полный https-адрес"},
+               "headers": {"type": "string", "description": "JSON-объект заголовков"},
+               "body": {"type": "string", "description": "Тело запроса, JSON"},
+               "auth_secret": {"type": "string", "description": "Имя секрета для Authorization, например @GITHUB_TOKEN"},
+               "timeout": {"type": "integer", "description": "Таймаут, сек (макс 180)"}},
+              ["method", "url"]),
     ]
 
 
@@ -537,6 +598,18 @@ _REGISTRY: dict[str, object] = {
     "view_image": tool_view_image,
     "grep": tool_grep,
     "read_file": tool_read_file,
+    # Инфраструктура и секреты живут в отдельном модуле: там бóльше
+    # кода и своя логика (шифрование, HTTP, работа с Render API).
+    "secret_set": _infra.tool_secret_set,
+    "secret_list": _infra.tool_secret_list,
+    "secret_delete": _infra.tool_secret_delete,
+    "infra_services": _infra.tool_infra_services,
+    "infra_env": _infra.tool_infra_env,
+    "infra_deploy": _infra.tool_infra_deploy,
+    "infra_deploy_status": _infra.tool_infra_deploy_status,
+    "infra_logs": _infra.tool_infra_logs,
+    "infra_create": _infra.tool_infra_create,
+    "http_request": _infra.tool_http_request,
     "list_files": tool_list_files,
     "tree": tool_tree,
     "make_dir": tool_make_dir,
