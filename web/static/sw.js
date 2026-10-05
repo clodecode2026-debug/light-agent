@@ -12,7 +12,7 @@
  * ВАЖНО: SW кэширует только статику. Данные агента (переписка, файлы)
  * живут на сервере и в Supabase — здесь их нет.
  */
-const VERSION = 'la-v2';
+const VERSION = 'claude-code-v7';
 // Ресурсы, которые кладём в кэш при установке.
 const ASSETS = [
   '/',
@@ -27,9 +27,9 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
+  self.skipWaiting();
   e.waitUntil((async () => {
     const cache = await caches.open(VERSION);
-    // addAll падает целиком, если хоть один файл 404. Кладём по одному.
     await Promise.all(ASSETS.map(async (url) => {
       try {
         await cache.add(new Request(url, { cache: 'reload' }));
@@ -37,68 +37,52 @@ self.addEventListener('install', (e) => {
         console.warn('[sw] не закэширован', url, err);
       }
     }));
-    self.skipWaiting();
   })());
 });
 
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
-    // Удаляем старые версии кэша
+    // Удаляем все старые версии кэша
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)));
+    await Promise.all(keys.map(k => {
+      if (k !== VERSION) return caches.delete(k);
+    }));
     await self.clients.claim();
   })());
 });
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET') return;   // POST (чат) не перехватываем
+  if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // API всегда идёт в сеть: свежесть важнее офлайна
+  // API всегда идёт в сеть напрямую
   if (url.pathname.startsWith('/api/') ||
       url.pathname.startsWith('/admin/') ||
       url.pathname.startsWith('/health')) {
     return;
   }
 
-  // Навигация: сначала сеть, при отказе — кэш
-  if (req.mode === 'navigate') {
-    e.respondWith((async () => {
-      try {
-        const fresh = await fetch(req);
+  // Network-first для всех ресурсов, чтобы всегда загружался самый свежий код
+  e.respondWith((async () => {
+    try {
+      const fresh = await fetch(req);
+      if (fresh && fresh.ok) {
         const cache = await caches.open(VERSION);
-        cache.put('/', fresh.clone());
-        return fresh;
-      } catch (err) {
-        const cache = await caches.open(VERSION);
-        const cached = await cache.match('/') || await cache.match('/static/app.css');
-        return cached || new Response(
+        cache.put(req, fresh.clone());
+      }
+      return fresh;
+    } catch (err) {
+      const cache = await caches.open(VERSION);
+      const cached = await cache.match(req);
+      if (cached) return cached;
+      if (req.mode === 'navigate') {
+        return new Response(
           '<h1>Нет связи</h1><p>Откройте приложение при подключении к сети.</p>',
           { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
       }
-    })());
-    return;
-  }
-
-  // Статика: сначала кэш, потом сеть
-  e.respondWith((async () => {
-    const cache = await caches.open(VERSION);
-    const cached = await cache.match(req);
-    if (cached) {
-      // Обновляем кэш в фоне, но отдаём мгновенно
-      fetch(req).then(r => {
-        if (r && r.ok) cache.put(req, r.clone());
-      }).catch(() => {});
-      return cached;
-    }
-    try {
-      const fresh = await fetch(req);
-      if (fresh && fresh.ok) cache.put(req, fresh.clone());
-      return fresh;
-    } catch (err) {
       return new Response('', { status: 504, statusText: 'offline' });
     }
   })());
