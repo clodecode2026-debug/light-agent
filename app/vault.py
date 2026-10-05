@@ -188,14 +188,15 @@ def _valid_name(name: str) -> tuple[bool, str]:
     return True, ""
 
 
-def set_secret(name: str, value: str, note: str = "") -> dict:
-    """Сохраняет или обновляет секрет (зашифрованным)."""
+def set_secret(name: str, value: str, note: str = "", project: str = "") -> dict:
+    """Сохраняет или обновляет секрет (зашифрованным) для конкретного проекта."""
     ok, why = _valid_name(name)
     if not ok:
         return {"ok": False, "error": why}
     if not value or not value.strip():
         return {"ok": False, "error": "Значение секрета пустое"}
 
+    proj = (project or config.get_current_project() or "default").strip() or "default"
     client = _get_client()
     if client is None:
         return {"ok": False, "error": "нет подключения к Supabase"}
@@ -205,34 +206,51 @@ def set_secret(name: str, value: str, note: str = "") -> dict:
             "name": name.strip(),
             "value": encrypt(value.strip()),
             "note": (note or "").strip()[:200],
+            "project": proj,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        # Сначала пробуем обновить - так не тратим уникальный индекс
+        # Сначала пробуем обновить по связке (project, name)
         upd = (client.table(SECRETS_TABLE)
                .update(payload)
+               .eq("project", proj)
                .eq("name", name.strip())
                .execute())
         if getattr(upd, "data", None):
-            return {"ok": True, "action": "updated", "name": name.strip()}
+            return {"ok": True, "action": "updated", "name": name.strip(), "project": proj}
 
         client.table(SECRETS_TABLE).insert(payload).execute()
-        return {"ok": True, "action": "created", "name": name.strip()}
+        return {"ok": True, "action": "created", "name": name.strip(), "project": proj}
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
-def get_secret(name: str) -> dict:
-    """Достаёт и расшифровывает секрет по имени."""
+def get_secret(name: str, project: str = "") -> dict:
+    """Достаёт и расшифровывает секрет. Сначала ищет в проекте, затем в default."""
     client = _get_client()
     if client is None:
         return {"ok": False, "error": "нет подключения к Supabase"}
+
+    proj = (project or config.get_current_project() or "default").strip() or "default"
     try:
+        # 1. Ищем секрет конкретного проекта
         r = (client.table(SECRETS_TABLE)
-             .select("name, value, note, updated_at")
+             .select("name, value, note, project, updated_at")
+             .eq("project", proj)
              .eq("name", name.strip())
              .limit(1)
              .execute())
         rows = r.data or []
+
+        # 2. Если в проекте нет, проверяем глобальный/default
+        if not rows and proj != "default":
+            r_def = (client.table(SECRETS_TABLE)
+                     .select("name, value, note, project, updated_at")
+                     .eq("project", "default")
+                     .eq("name", name.strip())
+                     .limit(1)
+                     .execute())
+            rows = r_def.data or []
+
         if not rows:
             return {"ok": False, "error": f"Секрет «{name}» не найден"}
         row = rows[0]
@@ -241,27 +259,29 @@ def get_secret(name: str) -> dict:
             "name": row["name"],
             "value": decrypt(row["value"]),
             "note": row.get("note", ""),
+            "project": row.get("project", proj),
             "updated_at": str(row.get("updated_at", "")),
         }
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
-def list_secrets() -> list[dict]:
-    """Список секретов БЕЗ значений — только имена и заметки."""
+def list_secrets(project: str | None = None) -> list[dict]:
+    """Список секретов БЕЗ значений — фильтруется по проекту."""
     client = _get_client()
     if client is None:
         return []
     try:
-        r = (client.table(SECRETS_TABLE)
-             .select("name, note, created_at, updated_at")
-             .order("name", desc=False)
-             .execute())
+        q = client.table(SECRETS_TABLE).select("name, note, project, created_at, updated_at")
+        if project:
+            q = q.eq("project", project.strip())
+        r = q.order("name", desc=False).execute()
         out = []
         for row in (r.data or []):
             out.append({
                 "name": row["name"],
                 "note": row.get("note", ""),
+                "project": row.get("project", "default"),
                 "updated_at": str(row.get("updated_at", "")),
             })
         return out
@@ -269,27 +289,31 @@ def list_secrets() -> list[dict]:
         return []
 
 
-def delete_secret(name: str) -> dict:
-    """Удаляет секрет."""
+def delete_secret(name: str, project: str = "") -> dict:
+    """Удаляет секрет внутри конкретного проекта."""
     ok, why = _valid_name(name)
     if not ok:
         return {"ok": False, "error": why}
     client = _get_client()
     if client is None:
         return {"ok": False, "error": "нет подключения к Supabase"}
+    proj = (project or config.get_current_project() or "default").strip() or "default"
     try:
         r = (client.table(SECRETS_TABLE)
-             .delete().eq("name", name.strip()).execute())
+             .delete()
+             .eq("project", proj)
+             .eq("name", name.strip())
+             .execute())
         if getattr(r, "data", None):
-            return {"ok": True, "deleted": name.strip()}
-        return {"ok": False, "error": f"Секрет «{name}» не найден"}
+            return {"ok": True, "deleted": name.strip(), "project": proj}
+        return {"ok": False, "error": f"Секрет «{name}» не найден в проекте «{proj}»"}
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
-def names() -> list[str]:
+def names(project: str = "") -> list[str]:
     """Только имена — чтобы подставлять в HTTP-запросы."""
-    return [s["name"] for s in list_secrets()]
+    return [s["name"] for s in list_secrets(project=project)]
 
 
 def status() -> dict:
