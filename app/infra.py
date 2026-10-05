@@ -238,6 +238,23 @@ def tool_infra_services() -> str:
     return "\n".join(lines)
 
 
+def _render_set_env(service_id: str, key: str, value: str) -> dict:
+    """Записывает одну переменную окружения.
+
+    Render API принимает ТОЛЬКО PUT на путь с именем переменной:
+      PUT /v1/services/<id>/env-vars/<KEY>   -> 200
+    А варианты PUT/POST/PATCH на коллекцию дают 400 «invalid JSON»
+    или 405 Method Not Allowed. Это проверено на живом сервере.
+    """
+    return _render("PUT", f"/services/{service_id}/env-vars/{key}",
+                   {"value": value})
+
+
+def _render_delete_env(service_id: str, key: str) -> dict:
+    """Удаляет переменную окружения."""
+    return _render("DELETE", f"/services/{service_id}/env-vars/{key}")
+
+
 def tool_infra_env(service_id: str, action: str = "list",
                    name: str = "", value: str = "",
                    secret: bool = False) -> str:
@@ -246,7 +263,9 @@ def tool_infra_env(service_id: str, action: str = "list",
     action=list   - показать (значения секретов скрыты)
     action=set    - добавить или обновить переменную
     action=delete - удалить переменную
-    secret=true   - сохранить значение как секрет (не показывать в UI)
+
+    Пример: infra_env(service_id="srv-xxx", action="set",
+                      name="OPENROUTER_API_KEY", value="sk-or-...", secret=true)
     """
     sid = (service_id or "").strip()
     if not sid:
@@ -263,43 +282,52 @@ def tool_infra_env(service_id: str, action: str = "list",
             return "Переменных окружения нет"
         lines = [f"Переменных: {len(items)}", ""]
         for e in items:
-            k = e.get("key", "?")
-            v = e.get("value")
-            shown = "•••" if (e.get("type") == "secret" or not v) else v
+            # Render оборачивает каждую переменную в {"envVar": {...}}
+            v = e.get("envVar", e) if isinstance(e, dict) else {}
+            k = v.get("key", "?")
+            val = v.get("value")
+            # Значение показываем только если это не секрет
+            shown = "•••" if (v.get("type") == "secret" or not val) else val
             lines.append(f"  {k} = {shown}")
         return "\n".join(lines)
 
-    if not name.strip():
+    key_enc = (name or "").strip()
+    if not key_enc:
         return "Нужно имя переменной (name)"
-    key_enc = name.strip()
 
     if action == "delete":
-        res = _render("DELETE", f"/services/{sid}/env-vars/{key_enc}")
-        if not res["ok"]:
-            return f"Ошибка: {res.get('error') or res.get('data')}"
+        res = _render_delete_env(sid, key_enc)
+        if not res.get("ok"):
+            return f"Ошибка удаления: {res.get('error') or res.get('data')}"
         return f"Переменная {key_enc} удалена"
 
-    payload = {"key": key_enc, "value": value,
-               "type": "secret" if secret else "plain"}
-    res = _render("PUT", f"/services/{sid}/env-vars", payload)
-    if not res["ok"]:
-        # На новую переменную PUT может не сработать - пробуем POST
-        res = _render("POST", f"/services/{sid}/env-vars", payload)
-    if not res["ok"]:
-        return f"Ошибка: {res.get('error') or res.get('data')}"
+    res = _render_set_env(sid, key_enc, value or "")
+    if not res.get("ok"):
+        return (f"Ошибка сохранения (код {res.get('status')}): "
+                f"{res.get('error') or res.get('data')}\n"
+                "Проверь, что сервис существует и значение не пустое.")
     kind = "секретом" if secret else "обычным значением"
-    return f"Переменная {key_enc} сохранена на сервисе {sid} как {kind}"
+    return (f"Переменная {key_enc} сохранена на сервисе {sid} как {kind}. "
+            f"Чтобы сервис увидел её, нужен новый деплой: infra_deploy.")
 
 
 def tool_infra_deploy(service_id: str, clear_cache: bool = False) -> str:
-    """Запускает новый деплой сервиса - собирает свежую версию кода."""
+    """Запускает новый деплой сервиса - собирает свежую версию кода.
+
+    Нужен, чтобы сервис увидел новые переменные окружения: Render
+    подставляет их только при новом деплое.
+    """
     sid = (service_id or "").strip()
     if not sid:
         return "Нужен service_id. Вызови infra_services."
-    res = _render("POST", f"/services/{sid}/deploys",
-                  {"clearCache": bool(clear_cache)})
+    # Render принимает для clearCache только строки "clear" / "do_not_clear",
+    # а не true/false - проверено на живом сервере.
+    payload = {"clearCache": "clear" if clear_cache else "do_not_clear"}
+    res = _render("POST", f"/services/{sid}/deploys", payload)
     if not res["ok"]:
-        return f"Ошибка запуска деплоя: {res.get('error') or res.get('data')}"
+        return (f"Ошибка запуска деплоя: {res.get('error') or res.get('data')}\n"
+                "Если сервис на бесплатном плане, деплой иногда недоступен "
+                "через API - перезапусти его в панели Render.")
     d = res["data"]
     dep = d.get("deploy", d) if isinstance(d, dict) else {}
     return f"Деплой запущен: id={dep.get('id')} статус={dep.get('status')}"
