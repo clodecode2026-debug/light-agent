@@ -18,8 +18,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (agent, config, infra, keepsleep, llm, memory, storage,
-               tools, vault)
+from . import (agent, config, infra, keepsleep, llm, memory, projects,
+               storage, tools, vault)
 
 WEB_DIR = config.BASE_DIR / "web"
 
@@ -35,6 +35,9 @@ SSE_MAX_SECONDS = 300
 async def lifespan(app: FastAPI):
     if memory.ensure_schema():
         print("[start] Supabase schema ready", flush=True)
+    # Инициализация схемы проектов, фактов и журнала действий
+    pres = projects.ensure_schema()
+    print(f"[start] projects schema: {pres}", flush=True)
     # Хранилище секретов: таблица создаётся сама через Management API
     vres = vault.ensure_table()
     print(f"[start] vault: {vres}", flush=True)
@@ -53,30 +56,39 @@ app = FastAPI(title="Light Agent", version="2.0", lifespan=lifespan)
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     session_id: str = Field("default", max_length=100)
+    project: str = Field("default", max_length=100)
 
 
 class SessionRequest(BaseModel):
     session_id: str = Field("default", max_length=100)
+    project: str = Field("default", max_length=100)
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field("", max_length=500)
 
 
 class FileBody(BaseModel):
     path: str = Field(..., max_length=500)
     content: str = ""
+    project: str = Field("default", max_length=100)
 
 
 class PathBody(BaseModel):
     path: str = Field(..., max_length=500)
+    project: str = Field("default", max_length=100)
 
 
 # ---------------- Служебное ----------------
 
-def _safe(rel: str):
-    """Путь внутри рабочей папки.
+def _safe(rel: str, project: str = ""):
+    """Путь внутри рабочей папки проекта.
 
     Попытка выйти за пределы даёт 400, а не 500.
     """
     try:
-        return tools._safe_path(rel or ".")
+        return tools._safe_path(rel or ".", project=project)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -143,7 +155,7 @@ async def status():
 async def chat(req: ChatRequest):
     """Обычный запрос: ждём полный ответ."""
     try:
-        job = agent.submit(req.session_id, req.message)
+        job = agent.submit(req.session_id, req.message, project=req.project)
         return await asyncio.to_thread(job.result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -164,15 +176,14 @@ async def chat_stream(req: ChatRequest):
     job_holder: dict = {}
 
     def on_event(kind: str, payload: dict) -> None:
-        # Обработчик крутится в потоке агента - кладём в очередь потокобезопасно.
         loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
 
     async def gen():
         started = time.monotonic()
         try:
             job_holder["job"] = agent.submit(req.session_id, req.message,
-                                            on_event=on_event)
-            yield _sse("open", {"session_id": req.session_id})
+                                            on_event=on_event, project=req.project)
+            yield _sse("open", {"session_id": req.session_id, "project": req.project})
 
             while True:
                 if time.monotonic() - started > SSE_MAX_SECONDS:
@@ -187,7 +198,6 @@ async def chat_stream(req: ChatRequest):
 
                 job = job_holder.get("job")
                 if job and job.done():
-                    # Дрениж остаток очереди перед финалом
                     await asyncio.sleep(0.05)
                     while not queue.empty():
                         kind, payload = queue.get_nowait()
@@ -223,7 +233,33 @@ async def cancel(req: SessionRequest):
             "message": "Задача отменена" if ok else "Нечего отменять"}
 
 
-# ---------------- Память ----------------
+# ---------------- Проекты ----------------
+
+@app.get("/api/projects")
+async def api_get_projects():
+    """Список всех проектов (из Supabase + папки в workspace)."""
+    return {"projects": projects.list_projects(), "active": config.get_current_project()}
+
+
+@app.post("/api/projects")
+async def api_create_project(req: ProjectCreateRequest):
+    """Создаёт новый проект и физическую папку для него."""
+    res = projects.create_project(req.name, req.description)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Ошибка создания проекта"))
+    return res
+
+
+@app.delete("/api/projects/{name}")
+async def api_delete_project(name: str):
+    """Удаляет проект."""
+    if name.lower() == "default":
+        raise HTTPException(status_code=400, detail="Нельзя удалить основной проект")
+    res = projects.delete_project(name)
+    return res
+
+
+# ---------------- Память и диалоги ----------------
 
 @app.post("/api/reset")
 async def reset(req: SessionRequest):
@@ -232,20 +268,56 @@ async def reset(req: SessionRequest):
 
 
 @app.get("/api/sessions")
-async def sessions():
-    """Список сессий с историей - их можно переключать в интерфейсе."""
-    return {"sessions": memory.list_sessions()}
+async def sessions(project: str = Query(None)):
+    """Список сессий. Если передан project, фильтрует по нему."""
+    proj = project if isinstance(project, str) else None
+    return {"sessions": memory.list_sessions(limit=50, project=proj)}
 
 
-# ---------------- Файлы ----------------
+@app.get("/api/project/{project}/messages")
+async def project_messages(project: str, limit: int = Query(100, ge=1, le=500)):
+    """Возвращает всю историю переписки конкретной папки/проекта."""
+    lim = limit if isinstance(limit, int) else 100
+    msgs = memory.get_project_history(project, limit=lim)
+    return {"ok": True, "project": project, "messages": msgs}
+
+
+@app.get("/api/session/{session_id}/messages")
+async def session_messages(session_id: str, limit: int = Query(100, ge=1, le=500)):
+    """Возвращает историю сообщений диалога для загрузки на любом устройстве."""
+    lim = limit if isinstance(limit, int) else 100
+    msgs = memory.get_history(session_id, limit=lim)
+    return {"ok": True, "session_id": session_id, "messages": msgs}
+
+
+@app.get("/api/history")
+async def api_history(session_id: str = Query(...), limit: int = Query(100, ge=1, le=500)):
+    """Алиас для загрузки истории диалога."""
+    sid = session_id if isinstance(session_id, str) else str(session_id)
+    lim = limit if isinstance(limit, int) else 100
+    msgs = memory.get_history(sid, limit=lim)
+    return {"ok": True, "session_id": sid, "messages": msgs}
+
+
+@app.delete("/api/session/{session_id}")
+async def api_delete_session(session_id: str):
+    """Удаляет сессию диалога."""
+    ok = memory.delete_session(session_id)
+    return {"ok": ok, "session_id": session_id}
+
+
+# ---------------- Файлы проекта ----------------
 
 @app.get("/api/tree")
-async def api_tree(path: str = ".", depth: int = Query(4, ge=1, le=10)):
-    """Структура проекта вложенным списком."""
-    base = config.WORKSPACE
+async def api_tree(path: str = ".", depth: int = Query(4, ge=1, le=10),
+                   project: str = Query("default")):
+    """Структура конкретного проекта."""
+    proj = project if isinstance(project, str) else "default"
+    base = config.project_dir(proj)
+    limit_depth = depth if isinstance(depth, int) else 4
 
     def build(p, level: int) -> list[dict]:
-        if level > depth:
+        if level > limit_depth:
             return []
         items: list[dict] = []
         try:
@@ -254,6 +326,8 @@ async def api_tree(path: str = ".", depth: int = Query(4, ge=1, le=10)):
         except Exception:
             return []
         for e in entries:
+            if e.name.startswith("."):
+                continue
             rel = str(e.relative_to(base)).replace("\\", "/")
             if e.is_dir():
                 items.append({"type": "dir", "name": e.name, "path": rel,
@@ -269,28 +343,31 @@ async def api_tree(path: str = ".", depth: int = Query(4, ge=1, le=10)):
                 })
         return items
 
-    return {"path": path, "tree": build(_safe(path), 1),
-            "workspace": str(base)}
+    target = _safe(path, project=proj)
+    return {"path": path, "tree": build(target, 1),
+            "project": proj, "workspace": str(base)}
 
 
 @app.get("/api/raw")
-async def api_raw(path: str):
-    """Отдаёт файл как есть - браузер сам поймёт, картинка это или нет."""
-    full = _safe(path)
+async def api_raw(path: str, project: str = Query("default")):
+    """Отдаёт файл из папки проекта как есть."""
+    proj = project if isinstance(project, str) else "default"
+    full = _safe(path, project=proj)
     if not full.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
     return FileResponse(full)
 
 
 @app.get("/api/file")
-async def api_read(path: str):
-    """Читает текстовый файл для просмотра и правки."""
-    full = _safe(path)
+async def api_read(path: str, project: str = Query("default")):
+    """Читает текстовый файл из проекта для просмотра и правки."""
+    proj = project if isinstance(project, str) else "default"
+    full = _safe(path, project=proj)
     if not full.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
-    if tools.is_image(path):
+    if tools.is_image(str(full)):
         return {"path": path, "is_image": True,
-                "mime": tools.image_mime(path),
+                "mime": tools.image_mime(str(full)),
                 "size": full.stat().st_size}
     try:
         if full.stat().st_size > 400_000:
@@ -304,13 +381,13 @@ async def api_read(path: str):
 
 @app.put("/api/file")
 async def api_save_file(body: FileBody):
-    """Сохраняет содержимое файла."""
+    """Сохраняет содержимое файла внутри активного проекта."""
     if not body.path.strip():
         raise HTTPException(status_code=400, detail="Не указан путь")
     if tools.is_image(body.path):
         raise HTTPException(status_code=400,
                             detail="Картинку нельзя править текстом")
-    full = _safe(body.path)
+    full = _safe(body.path, project=body.project)
     try:
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(body.content, encoding="utf-8")
@@ -321,10 +398,10 @@ async def api_save_file(body: FileBody):
 
 @app.post("/api/mkdir")
 async def api_mkdir(body: PathBody):
-    """Создаёт папку."""
+    """Создаёт папку внутри проекта."""
     if not body.path.strip():
         raise HTTPException(status_code=400, detail="Не указан путь")
-    full = _safe(body.path)
+    full = _safe(body.path, project=body.project)
     try:
         full.mkdir(parents=True, exist_ok=True)
         return {"ok": True, "path": body.path}
@@ -333,9 +410,10 @@ async def api_mkdir(body: PathBody):
 
 
 @app.delete("/api/file")
-async def api_delete(path: str, recursive: bool = False):
-    """Удаляет файл или папку."""
-    full = _safe(path)
+async def api_delete(path: str, recursive: bool = False, project: str = Query("default")):
+    """Удаляет файл или папку внутри проекта."""
+    proj = project if isinstance(project, str) else "default"
+    full = _safe(path, project=proj)
     try:
         if full.is_dir():
             if any(full.iterdir()) and not recursive:
@@ -356,8 +434,9 @@ async def api_delete(path: str, recursive: bool = False):
 
 
 @app.post("/api/upload")
-async def api_upload(file: UploadFile = File(...)):
-    """Загружает файл с компьютера в рабочую папку."""
+async def api_upload(file: UploadFile = File(...), project: str = Query("default")):
+    """Загружает файл с компьютера в рабочую папку проекта."""
+    proj = project if isinstance(project, str) else "default"
     name = os.path.basename((file.filename or "").replace("\\", "/"))
     if not name or name in (".", ".."):
         raise HTTPException(status_code=400, detail="Недопустимое имя файла")
@@ -367,7 +446,7 @@ async def api_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=413,
                             detail="Файл больше 5 МБ - сначала сожми его")
 
-    full = _safe(".") / name
+    full = _safe(".", project=proj) / name
     full.write_bytes(data)
     return {"ok": True, "name": name, "size": len(data), "path": name,
             "is_image": tools.is_image(name)}
@@ -375,11 +454,13 @@ async def api_upload(file: UploadFile = File(...)):
 
 @app.post("/api/rename")
 async def api_rename(body: dict):
-    """Переименовывает или перемещает файл."""
+    """Переименовывает или перемещает файл в проекте."""
     src = (body or {}).get("source", "")
     dst = (body or {}).get("destination", "")
+    proj = (body or {}).get("project", "default")
     if not src or not dst:
         raise HTTPException(status_code=400, detail="Нужны source и destination")
+    config.set_current_project(proj)
     result = tools.tool_move_file(src, dst)
     if result.startswith("Ошибка"):
         raise HTTPException(status_code=400, detail=result)
