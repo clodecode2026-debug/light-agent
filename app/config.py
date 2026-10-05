@@ -136,10 +136,14 @@ def providers() -> list[dict]:
     """Каскад провайдеров: первый доступный — основной, остальные — фолбэк."""
     chain: list[dict] = [
         {
-            "name": "antigravity",
+            "name": "Antigravity Pro",
             "base_url": AG_BASE_URL,
             "api_key": AG_API_KEY,
             "models": [AG_MODEL, AG_MODEL_FALLBACK],
+            "model_labels": {
+                AG_MODEL: "Antigravity 3.8 Flash (Pro) (antigravity-3.8-flash)",
+                AG_MODEL_FALLBACK: "Antigravity 3.8 Pro (Pro) (antigravity-3.8-pro)",
+            },
         }
     ]
     if OPENROUTER_API_KEY:
