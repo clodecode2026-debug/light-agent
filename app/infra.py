@@ -420,18 +420,44 @@ def tool_infra_deploy_status(deploy_id: str) -> str:
 
 
 def tool_infra_logs(deploy_id: str, tail: int = 60) -> str:
-    """Показывает последние строки логов деплоя."""
+    """Показывает детали, статус и причину завершения деплоя/сервиса на Render."""
     did = (deploy_id or "").strip()
     if not did:
-        return "Нужен deploy_id. Возьми его из infra_deploy_status"
+        return "Нужен deploy_id. Возьми его из infra_deploy_status или списка деплоев."
     d, sid = _render_find_deploy(did)
     if not sid:
-        return f"Деплой {did} не найден"
+        return f"Деплой {did} не найден среди сервисов"
+
+    dep = d.get("deploy", d) if isinstance(d, dict) else {}
+    status_str = dep.get("status", "unknown")
+    commit_msg = dep.get("commit", {}).get("message", "") if isinstance(dep.get("commit"), dict) else ""
+
+    # Пробуем запросить события сервиса для извлечения точной причины сбоя
+    event_info = ""
+    evs = _render("GET", f"/services/{sid}/events?limit=15")
+    if evs.get("ok") and isinstance(evs.get("data"), list):
+        for item in evs["data"]:
+            ev = item.get("event", item)
+            details = ev.get("details", {})
+            if details.get("deployId") == did or details.get("buildId") == dep.get("buildId"):
+                ev_type = ev.get("type")
+                reason = details.get("reason", {})
+                event_info += f"\n- [{ev.get('timestamp') or ev.get('createdAt')}] {ev_type}: {reason}"
+
+    # Пробуем стандартный эндпоинт логов (если поддерживается типом аккаунта)
     n = max(10, min(int(tail or 60), 300))
     res = _render("GET", f"/services/{sid}/deploys/{did}/logs?tail={n}")
-    if not res["ok"]:
-        return f"Ошибка получения логов: {res.get('error') or res.get('data')}"
-    return json.dumps(res["data"], ensure_ascii=False, indent=2)[:4000]
+    log_text = ""
+    if res.get("ok"):
+        log_text = "\n\nЛоги деплоя:\n" + json.dumps(res["data"], ensure_ascii=False, indent=2)[:3000]
+
+    return (
+        f"Деплой {did} (Сервис: {sid})\n"
+        f"Статус: {status_str}\n"
+        f"Коммит: {commit_msg}\n"
+        f"События инцидента:{event_info or ' (событий не найдено)'}"
+        f"{log_text}"
+    )
 
 
 def tool_infra_create(name: str, repo: str, branch: str = "main",
@@ -863,11 +889,33 @@ def tool_infra_deploy_project(service_name: str = "",
                     det = svc.get("serviceDetails", {})
                     url = det.get("url") or f"https://{safe_name}.onrender.com"
                     dep_res = tool_infra_deploy(sid, clear_cache=clear_cache)
+
+                    # Извлекаем deploy_id из ответа деплоя
+                    m_dep = re.search(r"id=([a-zA-Z0-9_\-]+)", dep_res)
+                    did = m_dep.group(1) if m_dep else ""
+
+                    # Автоматический мониторинг первых 15-30 секунд
+                    status_note = ""
+                    if did:
+                        time.sleep(3.0)
+                        d_info, _ = _render_find_deploy(did)
+                        cur_status = d_info.get("status") if isinstance(d_info, dict) else "building"
+                        if cur_status in ("update_failed", "build_failed", "canceled"):
+                            logs = tool_infra_logs(did)
+                            status_note = (
+                                f"\n\n⚠️ ВНИМАНИЕ: Деплой {did} завершился с ошибкой: {cur_status}!\n"
+                                f"Детали инцидента:\n{logs}\n"
+                                f"КРИТИЧЕСКИ ВАЖНО: Исправь ошибку в коде или настройках перед отчетом пользователю!"
+                            )
+                        else:
+                            status_note = f"\nТекущий статус деплоя {did}: {cur_status}."
+
                     return (
                         f"✅ Сервис '{safe_name}' найден на Render (ID: {sid})!\n"
                         f"{dep_res}\n"
-                        f"URL сервиса: {url}\n"
-                        "Деплой запущен на сервере. Через 1-2 минуты проект будет обновлён и доступен в интернете."
+                        f"URL сервиса: {url}"
+                        f"{status_note}\n\n"
+                        f"Следующий обязательный шаг: вызови `verify_deployment_health` с адресом {url}/health через 60-90 секунд для подтверждения запуска."
                     )
 
     # 2. Если сервис не найден — создаём новый
