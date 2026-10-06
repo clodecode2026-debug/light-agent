@@ -25,12 +25,15 @@ from __future__ import annotations
 import base64
 import concurrent.futures
 import hashlib
+import io
 import json
 import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 try:
@@ -515,6 +518,155 @@ def _gh_req(url: str, token: str, method: str = "GET",
             return e.code, body[:300]
     except Exception as exc:
         return 0, str(exc)
+
+
+def tool_github_search(query: str, language: str = "", max_results: int = 5, sort: str = "stars") -> str:
+    """Ищет проекты и готовые шаблоны на GitHub.
+    Параметры:
+      query — ключевые слова для поиска (например 'telegram bot template', 'landing page', 'fastapi crm')
+      language — язык программирования (например 'python', 'javascript', 'typescript', 'go')
+      max_results — количество результатов (от 1 до 10, по умолчанию 5)
+      sort — сортировка: 'stars' (по популярности/звёздам), 'forks', 'updated'
+    """
+    q_str = (query or "").strip()
+    if not q_str:
+        return "Укажи поисковый запрос (query), например 'telegram bot ai template'"
+
+    if language and language.strip():
+        q_str += f" language:{language.strip()}"
+
+    token, _ = _github_token()
+    encoded_q = urllib.parse.quote(q_str)
+    n = max(1, min(int(max_results or 5), 10))
+    sort_by = sort if sort in ("stars", "forks", "updated") else "stars"
+
+    url = f"https://api.github.com/search/repositories?q={encoded_q}&sort={sort_by}&order=desc&per_page={n}"
+    code, res = _gh_req(url, token, timeout=20.0)
+    if code != 200 or not isinstance(res, dict):
+        return f"Ошибка поиска на GitHub (код {code}): {res}"
+
+    items = res.get("items", [])
+    if not items:
+        return f"По запросу '{query}' на GitHub ничего не найдено."
+
+    lines = [f"Найдено репозиториев на GitHub (всего {res.get('total_count', len(items))}):", ""]
+    for i, it in enumerate(items, 1):
+        name = it.get("full_name", "?")
+        repo_url = it.get("html_url", "")
+        stars = it.get("stargazers_count", 0)
+        desc = (it.get("description") or "Без описания").strip()
+        lang = it.get("language") or "Не указан"
+        lines.append(f"{i}. **{name}** — ⭐ {stars} | {lang}")
+        lines.append(f"   URL: {repo_url}")
+        lines.append(f"   {desc[:160]}")
+        lines.append("")
+
+    lines.append("💡 Чтобы скачать любой из этих проектов в текущую папку проекта, вызови:")
+    lines.append("`github_clone(repo_url='https://github.com/owner/repo')`")
+    return "\n".join(lines)
+
+
+def tool_github_clone(repo_url: str, branch: str = "", dest_dir: str = "") -> str:
+    """Скачивает и распаковывает репозиторий с GitHub прямо в рабочую папку текущего проекта.
+    Позволяет взять готовый проект или шаблон и сразу начать его доработку.
+    Параметры:
+      repo_url — адрес репозитория (например 'https://github.com/owner/repo' или 'owner/repo')
+      branch — ветка (если не указана, берётся ветка по умолчанию)
+      dest_dir — подпапка в проекте (по умолчанию корень проекта '.')
+    """
+    raw_url = (repo_url or "").strip().rstrip("/")
+    if not raw_url:
+        return "Нужен URL репозитория GitHub (repo_url), например 'https://github.com/tiangolo/fastapi'"
+
+    raw_url = raw_url.removesuffix(".git")
+    if "github.com/" in raw_url:
+        parts = raw_url.split("github.com/")[-1].split("/")
+    else:
+        parts = raw_url.split("/")
+
+    if len(parts) < 2:
+        return f"Не удалось распознать репозиторий в строке '{repo_url}'. Формат: https://github.com/owner/repo или owner/repo"
+
+    owner, repo = parts[0].strip(), parts[1].strip()
+    token, _ = _github_token()
+
+    # 1. Если ветка не указана, узнаём default branch через API
+    target_branch = (branch or "").strip()
+    if not target_branch:
+        code, repo_data = _gh_req(f"https://api.github.com/repos/{owner}/{repo}", token, timeout=15.0)
+        if code == 200 and isinstance(repo_data, dict):
+            target_branch = repo_data.get("default_branch") or "main"
+        else:
+            target_branch = "main"
+
+    # 2. Скачиваем zip-архив
+    zip_url = f"https://api.github.com/repos/{owner}/{repo}/zipball/{target_branch}"
+    req = urllib.request.Request(
+        zip_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "LightAgent/2.0",
+        } if token else {"User-Agent": "LightAgent/2.0"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            zip_bytes = r.read()
+    except urllib.error.HTTPError as e:
+        return f"Ошибка скачивания репозитория {owner}/{repo} (HTTP {e.code}): {e.reason}"
+    except Exception as exc:
+        return f"Ошибка соединения при скачивании репозитория: {exc}"
+
+    # 3. Распаковываем архив в папку проекта
+    base = config.current_workspace()
+    sub = (dest_dir or "").strip().lstrip("/\\")
+    target_folder = (base / sub).resolve()
+    if not str(target_folder).startswith(str(base.resolve())):
+        return "Недопустимый путь назначения (выходит за пределы папки проекта)"
+    target_folder.mkdir(parents=True, exist_ok=True)
+
+    extracted_count = 0
+    ignored_patterns = {".git/", "__pycache__/", ".DS_Store"}
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            namelist = zf.namelist()
+            if not namelist:
+                return f"Скачанный архив репозитория {owner}/{repo} пуст."
+
+            root_prefix = namelist[0].split("/")[0] + "/"
+
+            for member in zf.infolist():
+                if any(ign in member.filename for ign in ignored_patterns):
+                    continue
+                if not member.filename.startswith(root_prefix):
+                    continue
+
+                rel_name = member.filename[len(root_prefix):]
+                if not rel_name:
+                    continue
+
+                dest_file = (target_folder / rel_name).resolve()
+                if not str(dest_file).startswith(str(target_folder.resolve())):
+                    continue
+
+                if member.is_dir():
+                    dest_file.mkdir(parents=True, exist_ok=True)
+                else:
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    dest_file.write_bytes(zf.read(member))
+                    extracted_count += 1
+    except Exception as exc:
+        return f"Ошибка распаковки файлов репозитория: {exc}"
+
+    cur_proj = config.get_current_project()
+    return (
+        f"✅ Репозиторий '{owner}/{repo}' (ветка: {target_branch}) успешно скачан и распакован!\n"
+        f"Проект: '{cur_proj}' (папка: {target_folder.name})\n"
+        f"Распаковано файлов: {extracted_count}\n"
+        f"Все файлы проекта готовы к просмотру, запуску и редактированию!"
+    )
 
 
 def tool_github_sync(repo_name: str = "", branch: str = "main",
