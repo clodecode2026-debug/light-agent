@@ -1,5 +1,7 @@
 """Инструменты агента: файлы, веб-поиск, выполнение кода."""
+import ast
 import io
+import json
 import re
 import subprocess
 import sys
@@ -27,6 +29,7 @@ SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. �
 
 Твои возможности:
 - Создаёшь, читаешь и правишь файлы в рабочей папке проекта.
+- Автономно валидируешь и тестируешь код: инструменты `validate_code` и `run_test`.
 - Выгружаешь проект на GitHub: инструмент `github_sync` (автоматически создаёт репозиторий при необходимости и загружает все файлы проекта).
 - Управляешь сервером и деплоем на Render: инструменты `infra_deploy_project`, `infra_services`, `infra_deploy`, `infra_logs`, `infra_env`.
 - Сохраняешь и используешь API-ключи: `secret_set`, `secret_list`.
@@ -36,11 +39,15 @@ SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. �
 
 ГЛАВНЫЕ ПРАВИЛА:
 1. КРИТИЧЕСКИ ВАЖНО: НИКОГДА не обещай на словах («Хорошо, сейчас сделаю», «Я загрузил проект на GitHub», «Я развернул сервис»), ЕСЛИ ТЫ НЕ ВЫЗВАЛ СООТВЕТСТВУЮЩИЙ ИНСТРУМЕНТ!
-2. Если пользователь просит выгрузить, сохранить или обновить проект на GitHub — СРАЗУ ВЫЗЫВАЙ инструмент `github_sync` в первом же шаге!
-3. Если пользователь просит развернуть / настроить сервер или задеплоить проект — СРАЗУ ВЫЗЫВАЙ `infra_deploy_project` или `infra_deploy`!
-4. Для работы с GitHub НЕ пиши ручные скрипты git push через execute_code — используй готовый инструмент `github_sync`.
-5. Если задача требует нескольких шагов — выполняй их по очереди через инструменты, а не описывай планы вместо выполнения.
-6. Отвечай кратко, чётко, на языке пользователя, сообщая конкретные результаты и ссылки.
+2. САМОПРОВЕРКА КОДА (SELF-CORRECTION):
+   - Если в ответе инструмента `write_file` или `edit_file` появилось предупреждение «⚠️ ВНИМАНИЕ (АВТОПРОВЕРКА КОДА)» — ТЫ ОБЯЗАН СЛЕДУЮЩИМ ЖЕ ШАГОМ ИСПРАВИТЬ ЕГО через `edit_file`! Никогда не оставляй сломанный код.
+   - После написания кода запускай `validate_code` или `run_test`, чтобы убедиться, что всё компилируется и работает без ошибок.
+   - Пользователю сообщай результат только тогда, когда код проверен и работает.
+3. Если пользователь просит выгрузить, сохранить или обновить проект на GitHub — СРАЗУ ВЫЗЫВАЙ инструмент `github_sync` в первом же шаге!
+4. Если пользователь просит развернуть / настроить сервер или задеплоить проект — СРАЗУ ВЫЗЫВАЙ `infra_deploy_project` или `infra_deploy`!
+5. Для работы с GitHub НЕ пиши ручные скрипты git push через execute_code — используй готовый инструмент `github_sync`.
+6. Если задача требует нескольких шагов — выполняй их по очереди через инструменты, а не описывай планы вместо выполнения.
+7. Отвечай кратко, чётко, на языке пользователя, сообщая конкретные результаты и ссылки.
 """
 
 _DANGEROUS = re.compile(
@@ -84,6 +91,41 @@ def image_mime(path: str) -> str:
     return IMAGE_MIME.get(Path(path).suffix.lower(), "application/octet-stream")
 
 
+# ---------------- Валидация и автопроверка кода ----------------
+
+def _lint_content(path: str, content: str) -> str | None:
+    """Проверяет синтаксис файла на лету при сохранении/редактировании."""
+    ext = Path(path).suffix.lower()
+    if ext == ".py":
+        try:
+            ast.parse(content, filename=path)
+        except SyntaxError as e:
+            line_text = f"\n   Строка {e.lineno}: {e.text.strip()}" if e.text else ""
+            return f"Синтаксическая ошибка Python (SyntaxError): строка {e.lineno}, символ {e.offset}: {e.msg}{line_text}"
+    elif ext == ".json":
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            return f"Ошибка структуры JSON (JSONDecodeError): строка {e.lineno}, символ {e.colno}: {e.msg}"
+    elif ext in (".js", ".ts", ".jsx", ".tsx"):
+        brackets = {"(": ")", "[": "]", "{": "}"}
+        stack = []
+        for line_num, line in enumerate(content.splitlines(), start=1):
+            for ch in line:
+                if ch in brackets:
+                    stack.append((ch, line_num))
+                elif ch in brackets.values():
+                    if not stack:
+                        return f"Лишняя закрывающая скобка '{ch}' на строке {line_num}"
+                    top, start_line = stack.pop()
+                    if brackets[top] != ch:
+                        return f"Несоответствие скобок: открыта '{top}' на строке {start_line}, а закрыта '{ch}' на строке {line_num}"
+        if stack:
+            top, start_line = stack[-1]
+            return f"Незакрытая скобка '{top}' на строке {start_line}"
+    return None
+
+
 # ---------------- Файлы ----------------
 
 def tool_write_file(path: str, content: str) -> str:
@@ -93,7 +135,17 @@ def tool_write_file(path: str, content: str) -> str:
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
         size = len(content.encode("utf-8"))
-        return f"Записан файл {path} ({size} байт)"
+        res = f"Записан файл {path} ({size} байт)."
+        lint_err = _lint_content(path, content)
+        if lint_err:
+            res += (
+                f"\n\n⚠️ ВНИМАНИЕ (АВТОПРОВЕРКА КОДА):\n"
+                f"{lint_err}\n"
+                f"КРИТИЧЕСКИ ВАЖНО: Код содержит ошибку! Немедленно исправь её в следующем шаге через edit_file или write_file!"
+            )
+        else:
+            res += " Автопроверка синтаксиса пройдена (ошибок нет)."
+        return res
     except Exception as exc:
         return f"Ошибка записи: {exc}"
 
@@ -166,9 +218,19 @@ def tool_edit_file(path: str, old_text: str, new_text: str,
             else content.replace(old_text, new_text, 1)
         full.write_text(content, encoding="utf-8")
 
-        return (f"Изменён {path}: заменено "
-                f"{'все вхождения' if replace_all else '1 место'} "
-                f"(всего было {count})")
+        res = (f"Изменён {path}: заменено "
+               f"{'все вхождения' if replace_all else '1 место'} "
+               f"(всего было {count}).")
+        lint_err = _lint_content(path, content)
+        if lint_err:
+            res += (
+                f"\n\n⚠️ ВНИМАНИЕ (АВТОПРОВЕРКА КОДА):\n"
+                f"{lint_err}\n"
+                f"КРИТИЧЕСКИ ВАЖНО: В коде осталась или появилась ошибка! Немедленно исправь её в следующем шаге!"
+            )
+        else:
+            res += " Автопроверка синтаксиса пройдена (ошибок нет)."
+        return res
     except Exception as exc:
         return f"Ошибка правки: {exc}"
 
@@ -387,6 +449,9 @@ def tool_execute_code(code: str) -> str:
 
     def _run():
         buf = io.StringIO()
+        ws_path = str(_ws().resolve())
+        if ws_path not in sys.path:
+            sys.path.insert(0, ws_path)
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             exec(  # noqa: S102 - намеренный sandbox на уровне строк
                 compile(code, "<agent>", "exec"),
@@ -423,6 +488,87 @@ def tool_run_python_file(path: str) -> str:
         return "Таймаут выполнения (120 сек)"
     except Exception as exc:
         return f"Ошибка запуска: {exc}"
+
+
+def tool_validate_code(path: str = "") -> str:
+    """Проверяет синтаксис файлов проекта (Python, JSON, JS/TS).
+    Если path указан — проверяет конкретный файл.
+    Если path пустой или '.' — сканирует все файлы проекта.
+    """
+    ws = _ws()
+    files_to_check: list[Path] = []
+    target = (path or "").strip()
+    if target and target != ".":
+        try:
+            full = _safe_path(target)
+            if not full.exists():
+                return f"Файл не найден: {target}"
+            files_to_check.append(full)
+        except Exception as exc:
+            return f"Неверный путь: {exc}"
+    else:
+        for p in ws.rglob("*"):
+            if p.is_file() and p.suffix.lower() in (".py", ".json", ".js", ".ts", ".jsx", ".tsx") and not any(part in (".git", "__pycache__", ".venv", "venv", "node_modules") for part in p.parts):
+                files_to_check.append(p)
+
+    if not files_to_check:
+        return "Нет файлов с кодом для проверки синтаксиса."
+
+    errors: list[str] = []
+    passed = 0
+    for f in files_to_check:
+        try:
+            rel = f.relative_to(ws).as_posix()
+        except Exception:
+            rel = f.name
+        try:
+            content = f.read_text(encoding="utf-8", errors="replace")
+            err = _lint_content(rel, content)
+            if err:
+                errors.append(f"❌ {rel}:\n   {err}")
+            else:
+                passed += 1
+        except Exception as exc:
+            errors.append(f"❌ {rel}: не удалось прочитать ({exc})")
+
+    if not errors:
+        return f"✅ Все проверенные файлы ({passed}) синтаксически корректны, ошибок нет!"
+    return f"⚠️ Обнаружены синтаксические ошибки ({len(errors)} файлов из {len(files_to_check)}):\n\n" + "\n\n".join(errors) + "\n\nНемедленно исправь указанные ошибки через edit_file!"
+
+
+def tool_run_test(target: str = "", args: str = "") -> str:
+    """Запускает автотесты проекта через pytest или unittest.
+    Возвращает статус прохождения и стек-трейс при падении.
+    """
+    ws = _ws()
+    cmd = [sys.executable, "-m", "pytest"]
+    try:
+        import pytest  # noqa: F401
+    except ImportError:
+        cmd = [sys.executable, "-m", "unittest"]
+
+    t = (target or "").strip()
+    if t:
+        cmd.append(t)
+    a = (args or "").strip()
+    if a:
+        cmd.extend(a.split())
+
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(ws), capture_output=True, text=True, timeout=60,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode == 0:
+            return f"✅ Все тесты успешно пройдены!\n{out[-3000:]}"
+        return (
+            f"❌ Тесты завершились с ошибками (код возврата {proc.returncode}):\n{out[-5000:]}\n\n"
+            f"Проанализируй ошибку выше и исправь код через edit_file!"
+        )
+    except subprocess.TimeoutExpired:
+        return "Таймаут выполнения тестов (60 сек)"
+    except Exception as exc:
+        return f"Ошибка запуска тестов: {exc}"
 
 
 # ---------------- Веб ----------------
@@ -619,6 +765,16 @@ def build_tools() -> list[dict]:
                "branch": {"type": "string", "description": "Ветка (по умолчанию main)"},
                "clear_cache": {"type": "boolean", "description": "Сбросить кэш сборки (по умолчанию true)"}}),
 
+        # ---------- Автопроверка и тестирование ----------
+        _tool("validate_code", "Проверяет файлы проекта на синтаксические ошибки (Python AST, JSON, JS/TS). "
+                               "Если path указан — проверяет конкретный файл. Если path пустой — сканирует все файлы проекта. "
+                               "Всегда вызывай этот инструмент после написания или правки кода для самопроверки.",
+              {"path": {"type": "string", "description": "Путь к файлу для проверки (необязательно, по умолч. все файлы)"}}),
+        _tool("run_test", "Запускает автотесты проекта через pytest или unittest. "
+                          "Возвращает подробный отчет об ошибках. Всегда запускай тесты перед сдачей работы.",
+              {"target": {"type": "string", "description": "Файл или путь с тестами (необязательно)"},
+               "args": {"type": "string", "description": "Дополнительные аргументы pytest"}}),
+
         # ---------- HTTP ----------
         _tool("http_request", "Делает HTTP-запрос к API облачного провайдера "
                               "(Render, Vercel, GitHub, AWS). "
@@ -662,6 +818,8 @@ _REGISTRY: dict[str, object] = {
     "delete_file": tool_delete_file,
     "execute_code": tool_execute_code,
     "run_python_file": tool_run_python_file,
+    "validate_code": tool_validate_code,
+    "run_test": tool_run_test,
     "web_search": tool_web_search,
     "search_web": tool_web_search,
     "search": tool_web_search,
