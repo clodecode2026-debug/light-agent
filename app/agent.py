@@ -13,7 +13,7 @@ from concurrent.futures import Future as _Future
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from . import config, llm, memory, tools
+from . import config, llm, memory, project_state, tools
 
 MAX_STEPS = 20           # защита от бесконечного цикла вызовов инструментов
 MAX_TOOL_OUTPUT = 8000   # сколько символов вывода инструмента уходит модели
@@ -65,6 +65,12 @@ def _build_messages(session_id: str, user_message: str,
     попавшийся вопрос, а не на последний.
     """
     system = tools.SYSTEM_PROMPT
+    try:
+        passport = project_state.format_passport_prompt(project)
+        if passport:
+            system += "\n\n" + passport
+    except Exception:
+        pass
     messages: list[dict] = []
 
     if history is not None:
