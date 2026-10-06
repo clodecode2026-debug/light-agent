@@ -63,6 +63,9 @@ SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. �
 7. Для работы с GitHub НЕ пиши ручные скрипты git push через execute_code — используй готовый инструмент `github_sync`.
 8. Если задача требует нескольких шагов — выполняй их по очереди через инструменты, а не описывай планы вместо выполнения.
 9. Отвечай кратко, чётко, на языке пользователя, сообщая конкретные результаты и ссылки.
+10. СТРОГИЙ SMOKE-ТЕСТ (ЗАПРЕТ «СЛЕПОТЫ УСПЕХА»):
+    - При развертывании или обновлении веб-сервиса ТЫ ОБЯЗАН вызвать `verify_deployment_health` с URL сервиса перед тем, как отчитаться об успехе.
+    - ЕСЛИ сервис вернул ошибку, статус >= 400 или не отвечает — СТРОГО ЗАПРЕЩЕНО писать пользователю «Всё готово и работает!». Ты обязан посмотреть логи (`infra_logs`), исправить причину падения и повторить проверку!
 """
 
 _DANGEROUS = re.compile(
@@ -216,6 +219,9 @@ def tool_view_image(path: str) -> str:
         return f"Ошибка просмотра: {exc}"
 
 
+_EDIT_FAIL_COUNTS: dict[str, int] = {}
+
+
 def tool_edit_file(path: str, old_text: str, new_text: str,
                    replace_all: bool = False) -> str:
     """Точечно меняет текст в файле: заменяет old_text на new_text."""
@@ -226,11 +232,31 @@ def tool_edit_file(path: str, old_text: str, new_text: str,
         content = full.read_text(encoding="utf-8", errors="replace")
 
         if old_text not in content:
-            # Подсказываем похожее - обычно ошибка в пробелах или отступах
+            # Ведём учёт неудач для предотвращения зацикливания
+            fail_key = f"{config.get_current_project()}:{path}"
+            _EDIT_FAIL_COUNTS[fail_key] = _EDIT_FAIL_COUNTS.get(fail_key, 0) + 1
+            fails = _EDIT_FAIL_COUNTS[fail_key]
+
             hint = _closest_line(content, old_text)
-            extra = (f"\nПохожего текста нет. Ближайшая строка: {hint}"
+            extra = (f"\nБлижайшая похожая строка в файле: {hint}"
                      if hint else "")
-            return (f"Текст для замены не найден в {path}.{extra}")
+
+            if fails >= 2:
+                return (
+                    f"⛔ КРИТИЧЕСКАЯ ОШИБКА: Текст для замены не найден в {path} уже {fails} раза подряд!\n"
+                    f"ЗАПРЕЩЕНО повторять вызов edit_file для этого файла — это ведёт к зацикливанию.\n"
+                    f"ДЕЙСТВИЕ: Используй инструмент tool_write_file для полной перезаписи файла целиком "
+                    f"или tool_read_file для чтения актуального содержимого."
+                )
+
+            return (
+                f"Текст для замены не найден в {path}.{extra}\n"
+                f"Подсказка: проверь точные отступы и пробелы или используй write_file."
+            )
+
+        # Сбрасываем счётчик неудач при успешной замене
+        fail_key = f"{config.get_current_project()}:{path}"
+        _EDIT_FAIL_COUNTS.pop(fail_key, None)
 
         count = content.count(old_text)
         content = content.replace(old_text, new_text) if replace_all \
@@ -509,10 +535,64 @@ def tool_run_python_file(path: str) -> str:
         return f"Ошибка запуска: {exc}"
 
 
+def _check_missing_requirements(ws: Path) -> list[str]:
+    """Сверяет сторонние импорты в .py файлах с зависимостями в requirements.txt."""
+    req_file = ws / "requirements.txt"
+    known_packages: set[str] = set()
+    if req_file.exists():
+        try:
+            for line in req_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    pkg = re.split(r"[><=~!;]", line)[0].strip().lower().replace("-", "_")
+                    if pkg:
+                        known_packages.add(pkg)
+        except Exception:
+            pass
+
+    # Маппинг частых модулей на их имена в PyPI / requirements.txt
+    PKG_MAP = {
+        "dotenv": "python_dotenv",
+        "jwt": "pyjwt",
+        "google.genai": "google_genai",
+        "PIL": "pillow",
+        "yaml": "pyyaml",
+        "bs4": "beautifulsoup4",
+        "psycopg2": "psycopg2_binary",
+    }
+
+    # Стандартная библиотека Python
+    stdlib = getattr(sys, "stdlib_module_names", set())
+
+    missing: set[str] = set()
+    for py_path in ws.rglob("*.py"):
+        if any(part in (".git", "__pycache__", ".venv", "venv", "node_modules") for part in py_path.parts):
+            continue
+        try:
+            tree = ast.parse(py_path.read_text(encoding="utf-8", errors="replace"), filename=str(py_path))
+        except Exception:
+            continue
+
+        for node in ast.walk(tree):
+            top_mod = None
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_mod = alias.name.split(".")[0]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                top_mod = node.module.split(".")[0]
+
+            if top_mod and top_mod not in stdlib and not (ws / f"{top_mod}.py").exists() and not (ws / top_mod).is_dir():
+                normalized = PKG_MAP.get(top_mod, top_mod.lower().replace("-", "_"))
+                if normalized not in known_packages and top_mod.lower() not in known_packages:
+                    missing.add(top_mod)
+
+    return sorted(missing)
+
+
 def tool_validate_code(path: str = "") -> str:
-    """Проверяет синтаксис файлов проекта (Python, JSON, JS/TS).
+    """Проверяет синтаксис файлов проекта (Python, JSON, JS/TS) и сверяет requirements.txt.
     Если path указан — проверяет конкретный файл.
-    Если path пустой или '.' — сканирует все файлы проекта.
+    Если path пустой или '.' — сканирует все файлы проекта и проверяет зависимости.
     """
     ws = _ws()
     files_to_check: list[Path] = []
@@ -550,9 +630,21 @@ def tool_validate_code(path: str = "") -> str:
         except Exception as exc:
             errors.append(f"❌ {rel}: не удалось прочитать ({exc})")
 
+    # Сверка requirements.txt при полном сканировании
+    dep_warning = ""
+    if not target or target == ".":
+        missing_pkgs = _check_missing_requirements(ws)
+        if missing_pkgs:
+            dep_warning = (
+                f"\n\n📦 ПРЕДУПРЕЖДЕНИЕ ПО ЗАВИСИМОСТЯМ:\n"
+                f"В Python-коде используются внешние пакеты, отсутствующие в requirements.txt:\n"
+                + "\n".join(f"   - {pkg}" for pkg in missing_pkgs) +
+                f"\nКРИТИЧНО: Добавь их в requirements.txt перед деплоем на Render, иначе сервер упадет с ModuleNotFoundError!"
+            )
+
     if not errors:
-        return f"✅ Все проверенные файлы ({passed}) синтаксически корректны, ошибок нет!"
-    return f"⚠️ Обнаружены синтаксические ошибки ({len(errors)} файлов из {len(files_to_check)}):\n\n" + "\n\n".join(errors) + "\n\nНемедленно исправь указанные ошибки через edit_file!"
+        return f"✅ Все проверенные файлы ({passed}) синтаксически корректны, синтаксических ошибок нет!{dep_warning}"
+    return f"⚠️ Обнаружены синтаксические ошибки ({len(errors)} файлов из {len(files_to_check)}):\n\n" + "\n\n".join(errors) + f"{dep_warning}\n\nНемедленно исправь указанные ошибки через edit_file или write_file!"
 
 
 def tool_run_test(target: str = "", args: str = "") -> str:
@@ -644,6 +736,52 @@ def tool_cloud_upload(filename: str) -> str:
         return f"Выгружено в облако: {key} ({full.stat().st_size} Б)"
     except Exception as exc:
         return f"Ошибка выгрузки: {exc}"
+
+
+def tool_verify_deployment_health(url: str, expected_status: int = 200, timeout_sec: int = 25) -> str:
+    """Выполняет реальный HTTP Smoke-тест задеплоенного сервиса.
+    ОБЯЗАТЕЛЕН к вызову перед завершением задачи деплоя.
+    Если сервис возвращает ошибку или недоступен — запрещено рапортовать об успехе!
+    """
+    url = (url or "").strip()
+    if not url:
+        return "Ошибка: URL не указан для верификации."
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = f"https://{url}"
+
+    try:
+        with httpx.Client(timeout=timeout_sec, follow_redirects=True) as client:
+            resp = client.get(url)
+            status = resp.status_code
+            snippet = resp.text[:400].strip()
+
+            if status == expected_status or (expected_status == 200 and status in (200, 301, 302, 307, 308)):
+                return (
+                    f"✅ ВЕРИФИКАЦИЯ ПРОЙДЕНА (HTTP {status})!\n"
+                    f"Сервис по адресу {url} отвечает и работает корректно.\n"
+                    f"Фрагмент ответа: {snippet[:150]}"
+                )
+            else:
+                return (
+                    f"❌ ВЕРИФИКАЦИЯ ПРОВАЛЕНА: Сервер вернул HTTP {status} вместо ожидаемого {expected_status}!\n"
+                    f"Тело ответа:\n{snippet}\n\n"
+                    f"КРИТИЧЕСКИ ВАЖНО: ЗАПРЕЩЕНО говорить пользователю, что всё работает! "
+                    f"Сервер упал или возвращает ошибку. Проверь логи (infra_logs), найди причину и исправь её!"
+                )
+    except httpx.ConnectError:
+        return (
+            f"❌ ВЕРИФИКАЦИЯ ПРОВАЛЕНА: Не удалось подключиться к {url} (ConnectError / Сервер не запущен).\n"
+            f"КРИТИЧЕСКИ ВАЖНО: Деплой ещё не завершился или сервер упал при старте. "
+            f"Проверь статус деплоя и логи через infra_logs!"
+        )
+    except httpx.TimeoutException:
+        return (
+            f"⚠️ ВЕРИФИКАЦИЯ: Таймаут ответа ({timeout_sec} сек) от {url}.\n"
+            f"Сервис либо ещё собирается/стартует (холодный старт Render), либо завис."
+        )
+    except Exception as exc:
+        return f"❌ Ошибка при выполнении проверки доступности {url}: {exc}"
+
 
 
 
@@ -829,15 +967,24 @@ def build_tools() -> list[dict]:
               {}),
         _tool("project_state_update", "Обновляет архитектурный паспорт проекта. "
                                      "ОБЯЗАТЕЛЬНО вызывай при согласовании архитектуры, смене стека, "
-                                     "добавлении ключевых файлов или смене текущего статуса разработки, "
-                                     "чтобы агент никогда не забывал контекст при долгих диалогах.",
+                                     "добавлении ключевых файлов, смене текущего статуса разработки "
+                                     "или фиксации уроков после исправления багов (post_mortems), "
+                                     "чтобы агент никогда не забывал контекст и не повторял старых ошибок.",
               {"goal": {"type": "string", "description": "Цель или описание проекта"},
                "tech_stack": {"type": "string", "description": "Стек технологий через запятую, например 'FastAPI, SQLite, Tailwind'"},
                "decisions": {"type": "string", "description": "Ключевые решения через точку с запятой, например 'JWT в cookie; SQLite для тестов'"},
                "status": {"type": "string", "description": "Текущий статус и над чем сейчас работаем"},
-               "files_summary": {"type": "string", "description": "Назначение файлов через точку с запятой, например 'auth.py: токены; main.py: API'"}}),
+               "files_summary": {"type": "string", "description": "Назначение файлов через точку с запятой, например 'auth.py: токены; main.py: API'"},
+               "post_mortems": {"type": "string", "description": "Уроки и предотвращенные ошибки через точку с запятой, например 'Не использовать starlette >=0.42; Запуск только через python main.py'"}}),
 
-        # ---------- HTTP ----------
+        # ---------- HTTP и Верификация ----------
+        _tool("verify_deployment_health", "Выполняет обязательный HTTP Smoke-тест задеплоенного сервиса. "
+                                          "ОБЯЗАТЕЛЬНО вызывай этот инструмент перед тем, как сообщить пользователю "
+                                          "о завершении деплоя. Если сервис возвращает ошибку — запрещено говорить об успехе!",
+              {"url": {"type": "string", "description": "URL сервиса (например https://my-app.onrender.com/health)"},
+               "expected_status": {"type": "integer", "description": "Ожидаемый код ответа (по умолч. 200)"},
+               "timeout_sec": {"type": "integer", "description": "Таймаут проверки в секундах (по умолч. 25)"}},
+              ["url"]),
         _tool("http_request", "Делает HTTP-запрос к API облачного провайдера "
                               "(Render, Vercel, GitHub, AWS). "
                               "В заголовках пиши @NAME - значение секрета "
@@ -873,6 +1020,7 @@ _REGISTRY: dict[str, object] = {
     "github_clone": _infra.tool_github_clone,
     "github_sync": _infra.tool_github_sync,
     "infra_deploy_project": _infra.tool_infra_deploy_project,
+    "verify_deployment_health": tool_verify_deployment_health,
     "delegate_task": _subagent.tool_delegate_task,
     "subagent_roles": _subagent.tool_subagent_roles,
     "project_state_get": _project_state.tool_project_state_get,
