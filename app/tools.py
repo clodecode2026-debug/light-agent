@@ -26,26 +26,21 @@ def _ws() -> Path:
 SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. Работаешь в облаке на сервере.
 
 Твои возможности:
-- Создаёшь, читаешь и правишь файлы в рабочей папке.
-- Точечно редактируешь существующие файлы через edit_file.
-- Создаёшь и удаляешь папки, перемещаешь и переименовываешь файлы.
-- Ищешь текст по всему проекту через grep.
-- Смотришь информацию об изображениях через view_image.
-- Ищешь информацию в интернете.
-- Выполняешь Python-код для вычислений и проверки гипотез.
-- Сохраняешь файлы в облачное хранилище.
-- Работаешь с файлами, которые пользователь загрузил через интерфейс.
+- Создаёшь, читаешь и правишь файлы в рабочей папке проекта.
+- Выгружаешь проект на GitHub: инструмент `github_sync` (автоматически создаёт репозиторий при необходимости и загружает все файлы проекта).
+- Управляешь сервером и деплоем на Render: инструменты `infra_deploy_project`, `infra_services`, `infra_deploy`, `infra_logs`, `infra_env`.
+- Сохраняешь и используешь API-ключи: `secret_set`, `secret_list`.
+- Выполняешь вычисления и проверяешь код через execute_code и run_python_file.
+- Ищешь информацию в интернете: web_search, fetch_url.
+- Сохраняешь файлы в S3 хранилище: cloud_upload.
 
-Правила работы:
-1. Файлы создаёт и изменяет ТОЛЬКО через инструменты. В ответе описывай результат словами, а не кодом в блоке.
-2. Чтобы поменять пару строк в готовом файле - вызывай edit_file, а не перезаписывай весь файл через write_file.
-3. Прежде чем читать много файлов, используй grep - так быстрее.
-4. Код запускай через run_python_file или execute_code, а не предлагай пользователю запустить его самому.
-5. Если задача требует нескольких шагов - выполняй их по очереди, а не описывай будущие шаги вместо выполнения.
-6. Создавая проект, сначала сделай папки через make_dir, потом файлы внутри них.
-7. Чтобы посмотреть структуру проекта, вызывай tree, а не list_files.
-8. Отвечай кратко и по делу, на языке пользователя.
-9. Не выдумывай результаты инструментов: если инструмент вернул ошибку - сообщи об этом.
+ГЛАВНЫЕ ПРАВИЛА:
+1. КРИТИЧЕСКИ ВАЖНО: НИКОГДА не обещай на словах («Хорошо, сейчас сделаю», «Я загрузил проект на GitHub», «Я развернул сервис»), ЕСЛИ ТЫ НЕ ВЫЗВАЛ СООТВЕТСТВУЮЩИЙ ИНСТРУМЕНТ!
+2. Если пользователь просит выгрузить, сохранить или обновить проект на GitHub — СРАЗУ ВЫЗЫВАЙ инструмент `github_sync` в первом же шаге!
+3. Если пользователь просит развернуть / настроить сервер или задеплоить проект — СРАЗУ ВЫЗЫВАЙ `infra_deploy_project` или `infra_deploy`!
+4. Для работы с GitHub НЕ пиши ручные скрипты git push через execute_code — используй готовый инструмент `github_sync`.
+5. Если задача требует нескольких шагов — выполняй их по очереди через инструменты, а не описывай планы вместо выполнения.
+6. Отвечай кратко, чётко, на языке пользователя, сообщая конкретные результаты и ссылки.
 """
 
 _DANGEROUS = re.compile(
@@ -381,17 +376,32 @@ def tool_execute_code(code: str) -> str:
     """Выполняет Python-код и возвращает результат. Для вычислений и проверки."""
     if _DANGEROUS.search(code):
         return "Отклонено: код содержит опасную конструкцию"
-    try:
-        import contextlib
 
+    import concurrent.futures
+    import contextlib
+    import os
+
+    # Предотвращаем интерактивные окна git и авторизации
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+    os.environ["GIT_ASKPASS"] = ""
+
+    def _run():
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             exec(  # noqa: S102 - намеренный sandbox на уровне строк
                 compile(code, "<agent>", "exec"),
                 {"__name__": "__main__"},
             )
-        out = buf.getvalue()
-        return out[-8000:] if out else "Код выполнен, вывода нет"
+        return buf.getvalue()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run)
+            try:
+                out = future.result(timeout=25.0)
+                return out[-8000:] if out else "Код выполнен, вывода нет"
+            except concurrent.futures.TimeoutError:
+                return "Ошибка: выполнение кода прервано по таймауту (25 сек). Код заблокировался или зациклился."
     except Exception:
         import traceback
         return traceback.format_exc()[-3000:]
@@ -589,6 +599,26 @@ def build_tools() -> list[dict]:
                "owner_id": {"type": "string", "description": "id рабочего пространства Render"}},
               ["name", "repo"]),
 
+        # ---------- GitHub и Деплой ----------
+        _tool("github_sync", "Выгружает и синхронизирует проект на GitHub в репозиторий. "
+                             "Автоматически создаёт репозиторий, если его ещё нет, "
+                             "и передаёт все файлы проекта через GitHub API. "
+                             "Используй этот инструмент, когда пользователь просит "
+                             "выгрузить, залить или сохранить проект на GitHub.",
+              {"repo_name": {"type": "string", "description": "Имя репозитория (по умолчанию имя текущего проекта)"},
+               "branch": {"type": "string", "description": "Ветка (по умолчанию main)"},
+               "message": {"type": "string", "description": "Сообщение коммита"},
+               "private": {"type": "boolean", "description": "Сделать репозиторий приватным"},
+               "all_repo": {"type": "boolean", "description": "Выгрузить корневой репозиторий light-agent (по умолч. false)"}}),
+        _tool("infra_deploy_project", "Развёртывает проект на сервере Render. "
+                                      "Если сервис уже существует (например light-agent) — запускает свежий деплой. "
+                                      "Если нет — создаёт веб-сервис на Render из указанного репозитория GitHub. "
+                                      "Используй, когда пользователь просит настроить сервер или задеплоить проект.",
+              {"service_name": {"type": "string", "description": "Имя сервиса на Render (по умолчанию light-agent или имя проекта)"},
+               "repo_url": {"type": "string", "description": "URL репозитория GitHub (необязательно)"},
+               "branch": {"type": "string", "description": "Ветка (по умолчанию main)"},
+               "clear_cache": {"type": "boolean", "description": "Сбросить кэш сборки (по умолчанию true)"}}),
+
         # ---------- HTTP ----------
         _tool("http_request", "Делает HTTP-запрос к API облачного провайдера "
                               "(Render, Vercel, GitHub, AWS). "
@@ -621,6 +651,8 @@ _REGISTRY: dict[str, object] = {
     "infra_deploy_status": _infra.tool_infra_deploy_status,
     "infra_logs": _infra.tool_infra_logs,
     "infra_create": _infra.tool_infra_create,
+    "github_sync": _infra.tool_github_sync,
+    "infra_deploy_project": _infra.tool_infra_deploy_project,
     "http_request": _infra.tool_http_request,
     "list_files": tool_list_files,
     "tree": tool_tree,
