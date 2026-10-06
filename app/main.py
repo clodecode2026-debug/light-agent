@@ -57,6 +57,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     session_id: str = Field("default", max_length=100)
     project: str = Field("default", max_length=100)
+    model: str | None = None
 
 
 class SessionRequest(BaseModel):
@@ -157,17 +158,18 @@ async def status():
 # ---------------- Чат ----------------
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, model: str | None = None):
     """Обычный запрос: ждём полный ответ."""
     try:
-        job = agent.submit(req.session_id, req.message, project=req.project)
+        chosen_model = req.model or model
+        job = agent.submit(req.session_id, req.message, project=req.project, model=chosen_model)
         return await asyncio.to_thread(job.result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, model: str | None = None):
     """SSE-стриминг: события приходят по мере работы агента.
 
     События:
@@ -186,8 +188,10 @@ async def chat_stream(req: ChatRequest):
     async def gen():
         started = time.monotonic()
         try:
+            chosen_model = req.model or model
             job_holder["job"] = agent.submit(req.session_id, req.message,
-                                            on_event=on_event, project=req.project)
+                                            on_event=on_event, project=req.project,
+                                            model=chosen_model)
             yield _sse("open", {"session_id": req.session_id, "project": req.project})
 
             while True:
