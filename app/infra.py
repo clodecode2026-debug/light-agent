@@ -22,7 +22,22 @@
 """
 from __future__ import annotations
 
+import base64
+import concurrent.futures
+import hashlib
 import json
+import os
+import re
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
 
 import httpx
 
@@ -181,6 +196,32 @@ def tool_http_request(method: str, url: str, headers: str = "",
 # ---------------------------------------------------------------------------
 # Render: инфраструктура
 # ---------------------------------------------------------------------------
+
+def _github_token() -> tuple[str, str]:
+    """Достаёт GitHub token: сначала из vault, потом из env, потом из credentials.txt."""
+    res = vault.get_secret("GITHUB_TOKEN")
+    if res.get("ok") and res.get("value"):
+        return res["value"].strip(), ""
+    res = vault.get_secret("GITHUB_PERSONAL_ACCESS_TOKEN")
+    if res.get("ok") and res.get("value"):
+        return res["value"].strip(), ""
+    for k in ("GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN"):
+        val = os.getenv(k, "").strip()
+        if val:
+            return val, ""
+    try:
+        from dotenv import dotenv_values
+        cred_path = config.BASE_DIR / "credentials.txt"
+        if cred_path.is_file():
+            creds = dotenv_values(cred_path)
+            for k in ("GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_TOKEN"):
+                if creds.get(k):
+                    return creds[k].strip(), ""
+    except Exception:
+        pass
+    return "", ("нет токена GitHub. Сохрани его: "
+                "secret_set(name=GITHUB_TOKEN, value=ghp_...)")
+
 
 def _render_key() -> tuple[str, str]:
     """Ключ Render: сначала из хранилища, потом из настроек."""
@@ -411,6 +452,279 @@ def tool_infra_create(name: str, repo: str, branch: str = "main",
     d = res["data"]
     s = d.get("service", d) if isinstance(d, dict) else {}
     return f"Сервис создан: {s.get('name')} id={s.get('id')}"
+
+
+# ---------------------------------------------------------------------------
+# GitHub: синхронизация и выгрузка проектов
+# ---------------------------------------------------------------------------
+
+def _git_blob_sha(data: bytes) -> str:
+    """Вычисляет sha1 блоба в формате git."""
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data).hexdigest()
+
+
+def _gh_req(url: str, token: str, method: str = "GET",
+            payload: dict | None = None, timeout: float = 15.0) -> tuple[int, object]:
+    """Быстрый надежный HTTP-запрос к GitHub API через urllib."""
+    data = json.dumps(payload).encode("utf-8") if payload else None
+    req = urllib.request.Request(
+        url, data=data, method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "LightAgent/2.0",
+            **({"Content-Type": "application/json"} if data else {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8")
+            return r.status, (json.loads(body) if body else None)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        try:
+            return e.code, json.loads(body)
+        except Exception:
+            return e.code, body[:300]
+    except Exception as exc:
+        return 0, str(exc)
+
+
+def tool_github_sync(repo_name: str = "", branch: str = "main",
+                     message: str = "Update project from Light Agent",
+                     private: bool = False,
+                     all_repo: bool = False) -> str:
+    """Выгружает проект на GitHub. Создаёт репозиторий, если его ещё нет,
+    и синхронизирует все файлы через GitHub API параллельно.
+
+    Параметры:
+      repo_name — имя репозитория на GitHub (по умолчанию имя активного проекта)
+      branch    — ветка (по умолчанию main)
+      message   — сообщение коммита
+      private   — делать ли репозиторий приватным (по умолчанию false)
+      all_repo  — выгрузить весь корневой репозиторий light-agent (по умолч. false)
+    """
+    token, err = _github_token()
+    if not token:
+        return f"Ошибка: {err}"
+
+    # 1. Узнаём логин пользователя
+    code, user_data = _gh_req("https://api.github.com/user", token)
+    if code != 200 or not isinstance(user_data, dict):
+        return f"Ошибка авторизации на GitHub (код {code}): {user_data}"
+    owner = user_data.get("login")
+    if not owner:
+        return "Не удалось определить имя пользователя GitHub"
+
+    # 2. Определяем имя репозитория
+    cur_proj = config.get_current_project()
+    target_repo = (repo_name or "").strip()
+    if not target_repo:
+        target_repo = "light-agent" if (cur_proj == "default" or all_repo) else cur_proj
+    safe_repo = re.sub(r"[^a-zA-Z0-9_\-\.]", "-", target_repo).strip("-") or "my-project"
+    branch = (branch or "main").strip()
+
+    # 3. Проверяем наличие репозитория на GitHub, создаём если нет
+    code, repo_info = _gh_req(f"https://api.github.com/repos/{owner}/{safe_repo}", token)
+    if code == 404:
+        create_payload = {
+            "name": safe_repo,
+            "private": bool(private),
+            "auto_init": True,
+            "description": f"Created via Light Agent ({cur_proj})",
+        }
+        c_code, c_res = _gh_req("https://api.github.com/user/repos", token, method="POST", payload=create_payload)
+        if c_code not in (200, 201):
+            return f"Ошибка создания репозитория {safe_repo} на GitHub (код {c_code}): {c_res}"
+        time.sleep(1.5)
+
+    # 4. Собираем файлы проекта для выгрузки
+    FORBIDDEN_NAMES = {".env", ".secrets", "credentials.txt", "credentials.json", ".env.local"}
+    files_to_sync: list[tuple[Path, str]] = []
+
+    if all_repo or (safe_repo == "light-agent" and cur_proj == "default"):
+        base_dir = config.BASE_DIR
+        for root, dirs, files in os.walk(base_dir):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "workspace", "reports", ".venv", "venv", "env", "node_modules", ".pytest_cache", ".mypy_cache")]
+            for f in files:
+                if f in FORBIDDEN_NAMES or f.endswith((".pyc", ".log", ".tmp", ".key", ".pem")) or f == "orion.svg":
+                    continue
+                full = Path(root) / f
+                try:
+                    rel = full.relative_to(base_dir).as_posix()
+                except Exception:
+                    continue
+                if rel.startswith("tests/cyr_") or rel.startswith("tests/render_") or rel.startswith("tests/deploy_"):
+                    continue
+                files_to_sync.append((full, rel))
+    else:
+        base_dir = config.current_workspace()
+        for root, dirs, files in os.walk(base_dir):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".venv", "venv", "env", "node_modules")]
+            for f in files:
+                if f in FORBIDDEN_NAMES or f.endswith((".pyc", ".log", ".tmp")):
+                    continue
+                full = Path(root) / f
+                try:
+                    rel = full.relative_to(base_dir).as_posix()
+                except Exception:
+                    continue
+                files_to_sync.append((full, rel))
+
+    if not files_to_sync:
+        readme = base_dir / "README.md"
+        readme.write_text(f"# {safe_repo}\n\nProject created with Light Agent.\n", encoding="utf-8")
+        files_to_sync.append((readme, "README.md"))
+
+    # 5. Проверяем файлы параллельно, чтобы найти только изменившиеся
+    uploaded = 0
+    identical = 0
+    errors: list[str] = []
+    need_upload: list[tuple[str, str, str | None]] = []
+
+    def check_file(item: tuple[Path, str]) -> tuple[str, str, str | None, str | None]:
+        p, rel = item
+        try:
+            content_bytes = p.read_bytes()
+            local_sha = _git_blob_sha(content_bytes)
+
+            get_url = f"https://api.github.com/repos/{owner}/{safe_repo}/contents/{rel}?ref={branch}"
+            get_code, get_data = _gh_req(get_url, token, timeout=12.0)
+            remote_sha = None
+            if get_code == 200 and isinstance(get_data, dict):
+                remote_sha = get_data.get("sha")
+                if remote_sha == local_sha:
+                    return ("identical", rel, None, None)
+
+            b64 = base64.b64encode(content_bytes).decode("ascii")
+            return ("need_upload", rel, b64, remote_sha)
+        except Exception as ex:
+            return ("error", rel, str(ex), None)
+
+    workers = min(10, max(2, len(files_to_sync)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        for status_kind, rel, b64, r_sha in executor.map(check_file, files_to_sync):
+            if status_kind == "identical":
+                identical += 1
+            elif status_kind == "need_upload":
+                need_upload.append((rel, b64, r_sha))
+            else:
+                errors.append(f"{rel}: {b64}")
+
+    # 6. Коммитим только изменившиеся файлы последовательно (защита от HTTP 409 conflict)
+    for rel, b64, remote_sha in need_upload:
+        put_url = f"https://api.github.com/repos/{owner}/{safe_repo}/contents/{rel}"
+        put_success = False
+        last_code = 0
+        for attempt in range(4):
+            put_payload = {
+                "message": f"{message}: {rel}",
+                "content": b64,
+                "branch": branch,
+            }
+            if remote_sha:
+                put_payload["sha"] = remote_sha
+
+            put_code, put_data = _gh_req(put_url, token, method="PUT", payload=put_payload, timeout=25.0)
+            last_code = put_code
+            if put_code in (200, 201):
+                uploaded += 1
+                put_success = True
+                break
+            elif put_code == 409:
+                time.sleep(0.5)
+                g_code, g_data = _gh_req(f"https://api.github.com/repos/{owner}/{safe_repo}/contents/{rel}?ref={branch}", token, timeout=12.0)
+                if g_code == 200 and isinstance(g_data, dict):
+                    remote_sha = g_data.get("sha")
+            else:
+                time.sleep(0.3)
+
+        if not put_success:
+            errors.append(f"{rel} -> HTTP {last_code}")
+
+    repo_url = f"https://github.com/{owner}/{safe_repo}"
+    res_text = (
+        f"✅ Проект '{cur_proj}' успешно выгружен на GitHub!\n"
+        f"Репозиторий: {repo_url}\n"
+        f"Ветка: {branch}\n"
+        f"Файлов обновлено/создано: {uploaded}, без изменений: {identical}."
+    )
+    if errors:
+        res_text += f"\nОшибок при передаче файлов ({len(errors)}): " + ", ".join(errors[:3])
+    return res_text
+
+
+def tool_infra_deploy_project(service_name: str = "",
+                              repo_url: str = "", branch: str = "main",
+                              clear_cache: bool = True) -> str:
+    """Развёртывает проект на сервере Render.
+    Если сервис с таким именем уже существует (например light-agent) — запускает свежий деплой.
+    Если нет — создаёт веб-сервис на Render из указанного репозитория GitHub.
+    """
+    key, err = _render_key()
+    if not key:
+        return f"Ошибка: {err}"
+
+    cur_proj = config.get_current_project()
+    name = (service_name or "").strip()
+    if not name:
+        name = "light-agent" if cur_proj == "default" else cur_proj
+    safe_name = re.sub(r"[^a-zA-Z0-9\-]", "-", name).strip("-").lower() or "light-agent"
+
+    # 1. Проверяем существующие сервисы на Render
+    services_res = _render("GET", "/services")
+    if services_res.get("ok"):
+        items = services_res.get("data", [])
+        if isinstance(items, list):
+            for item in items:
+                svc = item.get("service", item)
+                svc_name = svc.get("name", "").lower()
+                if svc_name == safe_name or svc_name == safe_name.replace("-", "_"):
+                    sid = svc.get("id")
+                    det = svc.get("serviceDetails", {})
+                    url = det.get("url") or f"https://{safe_name}.onrender.com"
+                    dep_res = tool_infra_deploy(sid, clear_cache=clear_cache)
+                    return (
+                        f"✅ Сервис '{safe_name}' найден на Render (ID: {sid})!\n"
+                        f"{dep_res}\n"
+                        f"URL сервиса: {url}\n"
+                        "Деплой запущен на сервере. Через 1-2 минуты проект будет обновлён и доступен в интернете."
+                    )
+
+    # 2. Если сервис не найден — создаём новый
+    target_repo = (repo_url or "").strip()
+    if not target_repo:
+        token, _ = _github_token()
+        owner = "clodecode2026-debug"
+        if token:
+            try:
+                with httpx.Client(timeout=15.0) as c:
+                    r = c.get("https://api.github.com/user", headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+                    if r.status_code == 200:
+                        owner = r.json().get("login") or owner
+            except Exception:
+                pass
+        target_repo = f"https://github.com/{owner}/{safe_name}"
+
+    owner_id = config.RENDER_OWNER_ID
+    if not owner_id:
+        owners_res = _render("GET", "/owners")
+        if owners_res.get("ok") and isinstance(owners_res.get("data"), list) and owners_res["data"]:
+            owner_id = owners_res["data"][0].get("owner", {}).get("id")
+
+    res = tool_infra_create(
+        name=safe_name,
+        repo=target_repo,
+        branch=branch or "main",
+        plan="free",
+        owner_id=owner_id or "",
+    )
+    return (
+        f"Попытка создания нового сервиса '{safe_name}' на Render:\n{res}\n"
+        f"Репозиторий источника: {target_repo}\n"
+        f"Ожидаемый адрес сервиса: https://{safe_name}.onrender.com"
+    )
 
 
 def status() -> dict:
