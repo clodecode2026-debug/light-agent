@@ -30,6 +30,8 @@ SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. �
 Твои возможности:
 - Создаёшь, читаешь и правишь файлы в рабочей папке проекта.
 - Автономно валидируешь и тестируешь код: инструменты `validate_code` и `run_test`.
+- Ищешь готовые репозитории и шаблоны на GitHub: инструмент `github_search`.
+- Скачиваешь и клонируешь проекты/шаблоны с GitHub в рабочую папку: инструмент `github_clone`.
 - Выгружаешь проект на GitHub: инструмент `github_sync` (автоматически создаёт репозиторий при необходимости и загружает все файлы проекта).
 - Управляешь сервером и деплоем на Render: инструменты `infra_deploy_project`, `infra_services`, `infra_deploy`, `infra_logs`, `infra_env`.
 - Сохраняешь и используешь API-ключи: `secret_set`, `secret_list`.
@@ -746,6 +748,19 @@ def build_tools() -> list[dict]:
               ["name", "repo"]),
 
         # ---------- GitHub и Деплой ----------
+        _tool("github_search", "Ищет открытые репозитории и шаблоны на GitHub. "
+                               "Используй, чтобы найти готовый проект, библиотеку или шаблон.",
+              {"query": {"type": "string", "description": "Поисковый запрос (например: 'telegram bot python', 'landing page')"},
+               "language": {"type": "string", "description": "Язык программирования (например: python, javascript, html)"},
+               "max_results": {"type": "integer", "description": "Количество результатов (1-10, по умолч. 5)"},
+               "sort": {"type": "string", "description": "Сортировка: stars, forks, updated (по умолч. stars)"}},
+              ["query"]),
+        _tool("github_clone", "Скачивает и распаковывает проект с GitHub в рабочую папку. "
+                              "Позволяет мгновенно клонировать готовый шаблон или репозиторий для доработки.",
+              {"repo_url": {"type": "string", "description": "URL репозитория (например 'https://github.com/owner/repo' или 'owner/repo')"},
+               "branch": {"type": "string", "description": "Ветка (необязательно, по умолч. default ветка репозитория)"},
+               "dest_dir": {"type": "string", "description": "Подпапка в текущем проекте для распаковки (по умолч. корень проекта)"}},
+              ["repo_url"]),
         _tool("github_sync", "Выгружает и синхронизирует проект на GitHub в репозиторий. "
                              "Автоматически создаёт репозиторий, если его ещё нет, "
                              "и передаёт все файлы проекта через GitHub API. "
@@ -807,6 +822,8 @@ _REGISTRY: dict[str, object] = {
     "infra_deploy_status": _infra.tool_infra_deploy_status,
     "infra_logs": _infra.tool_infra_logs,
     "infra_create": _infra.tool_infra_create,
+    "github_search": _infra.tool_github_search,
+    "github_clone": _infra.tool_github_clone,
     "github_sync": _infra.tool_github_sync,
     "infra_deploy_project": _infra.tool_infra_deploy_project,
     "http_request": _infra.tool_http_request,
