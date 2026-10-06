@@ -374,20 +374,43 @@ def tool_infra_deploy(service_id: str, clear_cache: bool = False) -> str:
     return f"Деплой запущен: id={dep.get('id')} статус={dep.get('status')}"
 
 
+def _render_find_deploy(deploy_id: str) -> tuple[dict, str]:
+    """Находит данные деплоя, проверяя сервисы."""
+    did = (deploy_id or "").strip()
+    if not did:
+        return {}, "Нужен deploy_id"
+    # Сначала проверяем основной сервис
+    main_sid = "srv-db1coonavr4c73b9vbu0"
+    res = _render("GET", f"/services/{main_sid}/deploys/{did}")
+    if res.get("ok"):
+        return res["data"], main_sid
+
+    # Если не там — перебираем сервисы
+    svcs = _render("GET", "/services")
+    if svcs.get("ok") and isinstance(svcs.get("data"), list):
+        for item in svcs["data"]:
+            sid = item.get("service", item).get("id")
+            if sid and sid != main_sid:
+                chk = _render("GET", f"/services/{sid}/deploys/{did}")
+                if chk.get("ok"):
+                    return chk["data"], sid
+    return {}, ""
+
+
 def tool_infra_deploy_status(deploy_id: str) -> str:
     """Показывает статус деплоя."""
     did = (deploy_id or "").strip()
     if not did:
         return "Нужен deploy_id"
-    res = _render("GET", f"/deploys/{did}")
-    if not res["ok"]:
-        return f"Ошибка: {res.get('error') or res.get('data')}"
-    d = res["data"]
+    d, sid = _render_find_deploy(did)
+    if not d:
+        return f"Деплой {did} не найден среди сервисов Render"
     dep = d.get("deploy", d) if isinstance(d, dict) else {}
     commit = ""
     if isinstance(dep.get("commit"), dict):
         commit = str(dep["commit"].get("message", ""))[:80]
     return (f"Деплой {dep.get('id')}\n"
+            f"  сервис:   {sid}\n"
             f"  статус:   {dep.get('status')}\n"
             f"  commit:   {commit}\n"
             f"  обновлён: {dep.get('updatedAt')}")
@@ -398,10 +421,13 @@ def tool_infra_logs(deploy_id: str, tail: int = 60) -> str:
     did = (deploy_id or "").strip()
     if not did:
         return "Нужен deploy_id. Возьми его из infra_deploy_status"
+    d, sid = _render_find_deploy(did)
+    if not sid:
+        return f"Деплой {did} не найден"
     n = max(10, min(int(tail or 60), 300))
-    res = _render("GET", f"/deploys/{did}/logs?tail={n}")
+    res = _render("GET", f"/services/{sid}/deploys/{did}/logs?tail={n}")
     if not res["ok"]:
-        return f"Ошибка: {res.get('error') or res.get('data')}"
+        return f"Ошибка получения логов: {res.get('error') or res.get('data')}"
     return json.dumps(res["data"], ensure_ascii=False, indent=2)[:4000]
 
 
