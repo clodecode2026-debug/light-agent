@@ -42,6 +42,7 @@
   --tool-bash:#d77757;
   --tool-search:#9b7bc4;
   --tool-net:#5b8ac9;
+  --tool-subagent:#c084fc;
 
   /* Diff */
   --diff-add:#3f7a4e;
@@ -254,6 +255,7 @@ header{
 .act.r-bash   .nm{color:var(--tool-bash)}
 .act.r-search .nm{color:var(--tool-search)}
 .act.r-net    .nm{color:var(--tool-net)}
+.act.r-subagent .nm{color:var(--tool-subagent);font-weight:600}
 .act.r-other  .nm{color:var(--txt2)}
 .act.err .nm{color:var(--err)}
 .act .el{color:var(--acc);opacity:.8}
