@@ -187,13 +187,21 @@ def format_passport_prompt(project: str = "") -> str:
         dec_lines.append(f"  • {decisions}")
     dec_str = "\n".join(dec_lines) if dec_lines else "  • нет специальных ограничений"
 
+    pm_lines = []
+    post_mortems = state.get("post_mortems") or []
+    if isinstance(post_mortems, list):
+        for pm in post_mortems[:6]:
+            pm_lines.append(f"  ⚠️ {pm}")
+    pm_str = ("\n⚡ УРОКИ И ИСПРАВЛЕННЫЕ ОШИБКИ (НЕ ПОВТОРЯЙ ИХ!):\n" + "\n".join(pm_lines)) if pm_lines else ""
+
     return (
         f"=== АРХИТЕКТУРНЫЙ ПАСПОРТ ПРОЕКТА '{proj_name}' ===\n"
         f"🎯 ЦЕЛЬ: {goal}\n"
         f"🛠 СТЕК: {stack_str}\n"
         f"📌 СТАТУС: {status}\n"
         f"📁 КЛЮЧЕВЫЕ ФАЙЛЫ:\n{arch_str}\n"
-        f"💡 ПРИНЯТЫЕ РЕШЕНИЯ:\n{dec_str}\n"
+        f"💡 ПРИНЯТЫЕ РЕШЕНИЯ:\n{dec_str}"
+        f"{pm_str}\n"
         f"ПОМНИ ЭТИ ДАННЫЕ И НЕ ТЕРЯЙ КОНТЕКСТ ПРОЕКТА!\n"
         f"=================================================="
     )
@@ -205,6 +213,7 @@ def update_state(
     decisions: str = "",
     status: str = "",
     files_summary: str = "",
+    post_mortems: str = "",
     project: str = "",
 ) -> dict[str, Any]:
     """Точечно обновляет поля паспорта проекта."""
@@ -237,6 +246,17 @@ def update_state(
             state["key_decisions"] = current_decs
         else:
             state["key_decisions"] = new_decs
+
+    if (post_mortems or "").strip():
+        new_pms = [p.strip() for p in post_mortems.split(";") if p.strip()]
+        current_pms = state.get("post_mortems") or []
+        if isinstance(current_pms, list):
+            for np in new_pms:
+                if np not in current_pms:
+                    current_pms.append(np)
+            state["post_mortems"] = current_pms
+        else:
+            state["post_mortems"] = new_pms
 
     if (files_summary or "").strip():
         arch = state.get("architecture") or {}
@@ -283,17 +303,19 @@ def tool_project_state_update(
     decisions: str = "",
     status: str = "",
     files_summary: str = "",
+    post_mortems: str = "",
 ) -> str:
-    """Обновляет архитектурный паспорт проекта (цель, стек, ключевые файлы, решения, статус).
-    Используй при начале проекта, при принятии архитектурных решений или смене статуса разработки,
-    чтобы агент никогда не забывал контекст.
+    """Обновляет архитектурный паспорт проекта (цель, стек, ключевые файлы, решения, статус, уроки ошибок).
+    Используй при начале проекта, при принятии архитектурных решений, смене статуса разработки
+    или после устранения критической ошибки (чтобы зафиксировать урок на будущее).
 
     Параметры:
       goal — цель или назначение проекта
       tech_stack — список технологий через запятую (например: 'FastAPI, SQLite, Tailwind')
-      decisions — новые принятые архитектурные решения через точку с запятой (например: 'Вход только через Telegram; Храним пароли в bcrypt')
+      decisions — новые принятые архитектурные решения через точку с запятой
       status — текущий статус (например: 'Сделали модели БД, пишем эндпоинты')
-      files_summary — описание файлов через точку с запятой (например: 'auth.py: токены; main.py: запуск API')
+      files_summary — описание файлов через точку с запятой
+      post_mortems — зафиксированные уроки и исправленные ошибки через точку с запятой (например: 'Не использовать starlette >=0.42; Запускать через python main.py')
     """
     updated = update_state(
         goal=goal,
@@ -301,6 +323,7 @@ def tool_project_state_update(
         decisions=decisions,
         status=status,
         files_summary=files_summary,
+        post_mortems=post_mortems,
     )
     return (
         f"✅ Паспорт проекта обновлён!\n\n"
