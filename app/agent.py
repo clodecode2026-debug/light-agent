@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from . import config, llm, memory, tools
 
-MAX_STEPS = 12           # защита от бесконечного цикла вызовов инструментов
+MAX_STEPS = 20           # защита от бесконечного цикла вызовов инструментов
 MAX_TOOL_OUTPUT = 8000   # сколько символов вывода инструмента уходит модели
 
 _step_counter = {"count": 0}
@@ -91,7 +91,7 @@ def _build_messages(session_id: str, user_message: str,
 def run(user_message: str, session_id: str = "default",
         history: list[dict] | None = None,
         on_event=None, cancel_event: threading.Event | None = None,
-        project: str = "default") -> dict:
+        project: str = "default", model: str | None = None) -> dict:
     """Выполняет задачу и возвращает финальный ответ.
 
     on_event(kind: str, payload: dict) вызывается по ходу работы:
@@ -126,7 +126,8 @@ def run(user_message: str, session_id: str = "default",
             if cancel_event.is_set():
                 return {
                     "ok": False, "cancelled": True,
-                    "error": "Задача отменена",
+                    "error": "Задача отменена пользователем",
+                    "answer": "⏹ Задача отменена пользователем.",
                     "steps": steps, "provider": provider_used,
                     "elapsed": round(time.perf_counter() - total_start, 2),
                 }
@@ -134,11 +135,13 @@ def run(user_message: str, session_id: str = "default",
             emit("step", {"index": step + 1, "max": MAX_STEPS})
 
             try:
-                resp = llm.chat(messages, tools=tool_specs)
+                resp = llm.chat(messages, tools=tool_specs, model=model)
             except llm.LLMError as exc:
                 _log(f"LLM unavailable: {exc}")
                 return {
-                    "ok": False, "error": str(exc), "steps": steps,
+                    "ok": False, "error": str(exc),
+                    "answer": f"⚠️ Ошибка сервиса модели: {exc}",
+                    "steps": steps,
                     "elapsed": round(time.perf_counter() - total_start, 2),
                 }
 
@@ -186,10 +189,12 @@ def run(user_message: str, session_id: str = "default",
                     "role": "tool", "tool_call_id": tc["id"], "content": trimmed,
                 })
 
+        err_msg = f"Превышен лимит шагов ({MAX_STEPS})."
+        recent = ("\nПоследние выполненные действия:\n" + "\n".join(f"- {s}" for s in steps[-4:])) if steps else ""
         return {
             "ok": False,
-            "error": (f"Превышен лимит шагов ({MAX_STEPS}). "
-                      f"Выполнено: {'; '.join(steps[:5])}"),
+            "error": err_msg,
+            "answer": f"⚠️ {err_msg}{recent}",
             "steps": steps, "provider": provider_used,
             "elapsed": round(time.perf_counter() - total_start, 2),
         }
@@ -199,7 +204,8 @@ def run(user_message: str, session_id: str = "default",
 
 
 def run_stream(user_message: str, session_id: str = "default",
-               history: list[dict] | None = None, project: str = "default"):
+               history: list[dict] | None = None, project: str = "default",
+               model: str | None = None):
     """Стриминг текста без инструментов — быстрый режим для вопросов."""
     config.set_current_project(project)
     touch()
@@ -207,7 +213,7 @@ def run_stream(user_message: str, session_id: str = "default",
 
     full: list[str] = []
     try:
-        for chunk in llm.stream(messages):
+        for chunk in llm.stream(messages, model=model):
             full.append(chunk)
             yield chunk
     except llm.LLMError as exc:
@@ -224,11 +230,12 @@ _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent")
 
 
 def submit(session_id: str, message: str, history=None,
-           on_event=None, project: str = "default") -> "Job":
+           on_event=None, project: str = "default",
+           model: str | None = None) -> "Job":
     """Запускает задачу в отдельном потоке."""
     ev = threading.Event()
     _active_cancel[session_id] = ev
-    fut = _pool.submit(run, message, session_id, history, on_event, ev, project)
+    fut = _pool.submit(run, message, session_id, history, on_event, ev, project, model)
     return Job(fut, session_id)
 
 
