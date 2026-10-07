@@ -37,12 +37,13 @@ def main_test() -> int:
     c = TestClient(main.app)
 
     # Чистим рабочую папку перед тестами
-    for name in ("t_dir", "t_pic.png"):
-        p = WS / name
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
-        elif p.is_file():
-            p.unlink()
+    for folder in (WS, config.current_workspace()):
+        for name in ("t_dir", "t_pic.png"):
+            p = folder / name
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.is_file():
+                p.unlink()
 
     # ---------- Базовые ----------
     section("Базовые маршруты")

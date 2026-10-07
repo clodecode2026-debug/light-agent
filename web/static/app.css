@@ -51,15 +51,25 @@
   --code:#e2e8f0;
   --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  height:100%;
+  height:calc(var(--vh, 1vh) * 100);
+  min-height:100%;
+  min-height:100dvh;
+  width:100%;
+  width:100vw;
+  width:100dvw;
 }
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
 body{
   background:var(--bg); color:var(--txt);
   font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
        "Helvetica Neue",Arial,sans-serif;
   display:flex; flex-direction:column; overflow:hidden;
   -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+  touch-action:manipulation;
 }
 button{font-family:inherit;font-size:13px;color:var(--txt);background:var(--panel2);
   border:1px solid var(--line);padding:6px 13px;border-radius:9px;cursor:pointer;
@@ -202,9 +212,9 @@ header{
 
 /* ---------- Центр ---------- */
 .center{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;
-  position:relative}
-.chat{flex:1;overflow-y:auto;padding:20px 0;min-height:0}
-.chat-inner{max-width:780px;margin:0 auto;padding:0 24px}
+  position:relative;width:100%}
+.chat{flex:1;overflow-y:auto;padding:16px 0;min-height:0;-webkit-overflow-scrolling:touch}
+.chat-inner{max-width:min(940px,95vw);width:100%;margin:0 auto;padding:0 20px}
 /* Стили .welcome и .sugg — ниже, в секции «Welcome» рядом с палитрой */
 
 /* Сообщения */
@@ -374,8 +384,8 @@ header{
 .chip:active{transform:scale(.97)}
 
 .composer{flex-shrink:0;background:var(--panel);border-top:1px solid var(--line);
-  padding:10px 24px calc(12px + env(safe-area-inset-bottom))}
-.composer-inner{max-width:780px;margin:0 auto}
+  padding:10px 20px calc(12px + env(safe-area-inset-bottom))}
+.composer-inner{max-width:min(940px,95vw);width:100%;margin:0 auto}
 
 .composer-card{background:var(--bg2);border:1px solid var(--line2);border-radius:18px;
   box-shadow:0 4px 18px rgba(0,0,0,.28);display:flex;flex-direction:column;
@@ -527,20 +537,32 @@ button.pulse::after{
   body{font-size:15px}
   .win-controls{display:none !important}
   .side-close-mobile{display:inline-flex}
-  header{height:48px;gap:6px;padding:0 8px}
+  header{
+    height:50px;
+    gap:6px;
+    padding:0 max(10px,env(safe-area-inset-right)) 0 max(10px,env(safe-area-inset-left));
+  }
   header .badge{font-size:10px;padding:2px 6px}
   .win-controls{display:none !important}
   .mobile-new-chat-btn{display:inline-flex !important}
-  .win-title{font-size:12px;gap:5px}
-  .win-title-icon{width:16px;height:16px}
-  #bSide{min-width:36px;min-height:36px;font-size:16px;display:inline-flex;align-items:center;justify-content:center}
+  .win-title{
+    position:static;
+    transform:none;
+    font-size:12px;
+    gap:5px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:40vw;
+  }
+  .win-title-icon{width:16px;height:16px;flex-shrink:0}
+  #bSide{min-width:38px;min-height:38px;font-size:17px;display:inline-flex;align-items:center;justify-content:center}
   /* На телефоне скрываем второстепенные бейджи */
   #bMem,#bSto,#bLLM{display:none !important}
-  #selModel{max-width:125px;font-size:11px;padding:3px 6px;border-radius:8px}
+  #selModel{max-width:130px;font-size:11px;padding:4px 6px;border-radius:8px}
   #bNet{font-size:9.5px;padding:2px 5px}
 
-  .chat{padding:8px 0}
-  .chat-inner{padding:0 8px}
+  .chat{padding:10px 0;width:100%}
+  .chat-inner{padding:0 10px;max-width:100%}
   .welcome{padding:20px 8px 12px}
   .claude-symbol-img{width:64px;height:64px;border-radius:14px}
   .claude-title{font-size:26px}

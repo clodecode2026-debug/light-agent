@@ -15,8 +15,9 @@ from datetime import datetime, timezone
 
 from . import config, llm, memory, project_state, tools
 
-MAX_STEPS = 20           # защита от бесконечного цикла вызовов инструментов
+MAX_STEPS = 100          # Базовый лимит до 100 шагов (поддерживает бесконечный режим)
 MAX_TOOL_OUTPUT = 8000   # сколько символов вывода инструмента уходит модели
+MAX_LOOP_REPEATS = 4     # предотвращение зацикливания на одинаковых вызовах с теми же аргументами
 
 _step_counter = {"count": 0}
 _last_activity = {"ts": time.time()}
@@ -126,9 +127,13 @@ def run(user_message: str, session_id: str = "default",
     steps: list[str] = []
     provider_used = ""
     total_start = time.perf_counter()
+    call_signatures: dict[str, int] = {}
+    max_steps_allowed = MAX_STEPS
 
     try:
-        for step in range(MAX_STEPS):
+        step = 0
+        while step < max_steps_allowed:
+            step += 1
             if cancel_event.is_set():
                 return {
                     "ok": False, "cancelled": True,
@@ -138,7 +143,12 @@ def run(user_message: str, session_id: str = "default",
                     "elapsed": round(time.perf_counter() - total_start, 2),
                 }
 
-            emit("step", {"index": step + 1, "max": MAX_STEPS})
+            emit("step", {"index": step, "max": max_steps_allowed})
+
+            # Сжатие длинной цепочки вызовов инструментов для экономии токенов модели
+            if len(messages) > 28:
+                # Оставляем системный промпт, исходный запрос пользователя и последние 18 сообщений
+                messages = [messages[0], messages[1]] + messages[-18:]
 
             try:
                 resp = llm.chat(messages, tools=tool_specs, model=model)
@@ -175,16 +185,30 @@ def run(user_message: str, session_id: str = "default",
                 ],
             })
 
+            loop_detected = False
             for tc in resp["tool_calls"]:
                 if cancel_event.is_set():
                     break
+                sig = f"{tc['name']}:{tc.get('raw', '')}"
+                call_signatures[sig] = call_signatures.get(sig, 0) + 1
+                if call_signatures[sig] >= MAX_LOOP_REPEATS:
+                    loop_detected = True
+                    _log(f"Loop detected on tool {tc['name']} ({call_signatures[sig]} repeats)")
+
                 preview = ", ".join(
                     f"{k}={str(v)[:40]}" for k, v in list(tc["args"].items())[:3])
                 emit("tool", {"name": tc["name"], "args": tc["args"],
                               "preview": preview})
                 _log(f"tool {tc['name']}({preview})")
 
-                output = tools.execute(tc["name"], tc["args"])
+                if loop_detected:
+                    output = (
+                        f"⛔ ПРЕДУПРЕЖДЕНИЕ: Инструмент {tc['name']} вызван повторно с теми же аргументами уже {call_signatures[sig]} раз! "
+                        f"Зацикливание остановлено. Проанализируй предыдущие ошибки или заверши задачу, предоставив ответ пользователю."
+                    )
+                else:
+                    output = tools.execute(tc["name"], tc["args"])
+
                 trimmed = output[:MAX_TOOL_OUTPUT]
                 if len(output) > MAX_TOOL_OUTPUT:
                     trimmed += (f"\n...[обрезано, было {len(output)} символов]")
@@ -195,12 +219,17 @@ def run(user_message: str, session_id: str = "default",
                     "role": "tool", "tool_call_id": tc["id"], "content": trimmed,
                 })
 
-        err_msg = f"Превышен лимит шагов ({MAX_STEPS})."
+            # Если агент приближается к лимиту, но активно продуктивно работает без зацикливания — расширяем бюджет шагов
+            if step >= max_steps_allowed - 2 and not loop_detected and max_steps_allowed < 300:
+                max_steps_allowed += 20
+                _log(f"Dynamic step expansion: new max_steps = {max_steps_allowed}")
+
+        err_msg = f"Выполнено максимальное количество шагов ({max_steps_allowed})."
         recent = ("\nПоследние выполненные действия:\n" + "\n".join(f"- {s}" for s in steps[-4:])) if steps else ""
         return {
             "ok": False,
             "error": err_msg,
-            "answer": f"⚠️ {err_msg}{recent}",
+            "answer": f"⚠️ {err_msg}{recent}\n\nЕсли требуется продолжить, просто напиши «продолжай».",
             "steps": steps, "provider": provider_used,
             "elapsed": round(time.perf_counter() - total_start, 2),
         }
