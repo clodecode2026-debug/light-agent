@@ -1,0 +1,18 @@
+[
+  {
+    "session_id": "test-sse",
+    "role": "user",
+    "content": "Назови столицу Франции одним словом",
+    "created_at": "2026-10-08T00:31:19.450723+00:00",
+    "project": "default",
+    "meta": null
+  },
+  {
+    "session_id": "test-sse",
+    "role": "assistant",
+    "content": "Париж",
+    "created_at": "2026-10-08T00:31:21.380876+00:00",
+    "project": "default",
+    "meta": null
+  }
+]
