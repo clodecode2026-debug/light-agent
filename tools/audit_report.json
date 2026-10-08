@@ -1,0 +1,29 @@
+{
+  "quality_score": 100.0,
+  "status": "EXCELLENT",
+  "components": {
+    "tts_speech_sanitizer": {
+      "passed": true,
+      "score": 100.0,
+      "details": "5/5 TTS clean tests passed. Zero asterisks or emojis."
+    },
+    "course_content_richness": {
+      "total_lessons": 180,
+      "empty_lessons_count": 0,
+      "short_lessons_count": 0,
+      "lessons_with_grammar": 180,
+      "lessons_with_nouns_articles": 180,
+      "lessons_with_dialogues": 180,
+      "unit_guidebooks_count": 36,
+      "score": 100.0,
+      "details": "180 lessons scanned. Empty: 0, With Articles: 180, With Grammar: 180."
+    },
+    "frontend_assets": {
+      "passed": true,
+      "missing_files": [],
+      "score": 100,
+      "details": "All core sound/image assets exist"
+    }
+  },
+  "action_items": []
+}
