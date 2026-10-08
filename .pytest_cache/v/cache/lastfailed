@@ -1,1 +1,3 @@
-{}
+{
+  "tests/test_voice_synth.py::test_voices": true
+}
