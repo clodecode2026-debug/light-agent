@@ -454,6 +454,53 @@ def tool_move_file(source: str, destination: str) -> str:
         return f"Ошибка перемещения: {exc}"
 
 
+def tool_browser(url: str, action: str = "navigate", selector: str | None = None, text: str | None = None) -> str:
+    """Управляет веб-браузером на мастер-сервере (переход, клик, ввод текста, скриншот)."""
+    master_url = os.getenv("AG_BASE_URL", "https://agent-master-server.onrender.com/v1").replace("/v1", "").rstrip("/")
+    api_key = os.getenv("AG_API_KEY", "sk-antigravity-master-roman")
+    endpoint = f"{master_url}/api/browser/navigate"
+    payload = {"url": url, "action": action}
+    if selector:
+        payload["selector"] = selector
+    if text:
+        payload["text"] = text
+    try:
+        with httpx.Client(timeout=45) as client:
+            resp = client.post(endpoint, json=payload, headers={"Authorization": f"Bearer {api_key}"})
+        if resp.status_code != 200:
+            return f"Ошибка браузера (HTTP {resp.status_code}): {resp.text[:300]}"
+        data = resp.json()
+        out = [f"URL: {data.get('url', url)}", f"Заголовок: {data.get('title', '')}"]
+        if data.get("text"):
+            out.append(f"Текст страницы:\n{data['text'][:1500]}")
+        b64 = data.get("screenshot_base64")
+        if b64:
+            import base64 as _b64
+            shot_file = _ws() / "browser_screenshot.png"
+            shot_file.write_bytes(_b64.b64decode(b64))
+            out.append("Скриншот сохранён в проект: browser_screenshot.png")
+        return "\n".join(out)
+    except Exception as exc:
+        return f"Ошибка обращения к браузеру: {exc}"
+
+
+def tool_browser_import_cookies(cookies: str, url: str = "https://www.google.com") -> str:
+    """Импортирует сессионные cookies пользователя в браузер мастера для авторизации в Google Flow / Gemini."""
+    master_url = os.getenv("AG_BASE_URL", "https://agent-master-server.onrender.com/v1").replace("/v1", "").rstrip("/")
+    api_key = os.getenv("AG_API_KEY", "sk-antigravity-master-roman")
+    endpoint = f"{master_url}/api/browser/import-cookies"
+    try:
+        cookie_data = json.loads(cookies) if isinstance(cookies, str) and cookies.strip().startswith(("[", "{")) else cookies
+        payload = {"cookies": cookie_data, "url": url}
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(endpoint, json=payload, headers={"Authorization": f"Bearer {api_key}"})
+        if resp.status_code == 200:
+            return f"Cookies успешно импортированы для {url}."
+        return f"Ошибка импорта cookies (HTTP {resp.status_code}): {resp.text[:300]}"
+    except Exception as exc:
+        return f"Ошибка импорта cookies: {exc}"
+
+
 # ---------------- Спецификации инструментов ----------------
 
 def _tool(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -570,6 +617,7 @@ def build_tools() -> list[dict]:
             "agent",
             "Запускает автономного специализированного субагента в изолированном контексте. "
             "Роли: 'researcher' (исследование/поиск), 'coder' (написание модулей), "
+            "'director' (сценарии, раскадровки, промпты для Gemini Omni/Veo), "
             "'tester' (запуск тестов/верификация), 'devops' (настройка серверов/git/окружения), 'general' (универсальный).",
             {"role": {"type": "string", "description": "Роль субагента"},
               "task": {"type": "string", "description": "Чёткое и детальное задание для субагента"},
@@ -597,6 +645,23 @@ def build_tools() -> list[dict]:
             ["path"],
         ),
         _tool(
+            "browser",
+            "Автономный веб-браузер (Playwright): переходит по URL, делает клики, вводит текст, сохраняет скриншоты страницы. "
+            "Используется для взаимодействия с Google Flow, веб-интерфейсами генерации видео и скачивания результатов.",
+            {"url": {"type": "string", "description": "Полный адрес страницы"},
+             "action": {"type": "string", "description": "navigate, click, type или screenshot"},
+             "selector": {"type": "string", "description": "CSS-селектор элемента для клика или ввода"},
+             "text": {"type": "string", "description": "Текст для ввода в поле (для action='type')"}},
+            ["url"],
+        ),
+        _tool(
+            "browser_import_cookies",
+            "Импортирует сессионные cookies пользователя в браузер агента для авторизации в Google Flow / Gemini / Google Pro.",
+            {"cookies": {"type": "string", "description": "JSON строка с cookies (экспортированная из личного браузера)"},
+             "url": {"type": "string", "description": "Домен для применения cookies (по умолч. 'https://gemini.google.com')"}},
+            ["cookies"],
+        ),
+        _tool(
             "web_search",
             "Поиск информации в интернете.",
             {"query": {"type": "string", "description": "Поисковый запрос"}},
@@ -622,6 +687,8 @@ _REGISTRY = {
     "todo": tool_todo,
     "image_generate": tool_image_generate,
     "inspect_image": tool_inspect_image,
+    "browser": tool_browser,
+    "browser_import_cookies": tool_browser_import_cookies,
     "web_search": tool_web_search,
     "fetch_url": tool_fetch_url,
     "move_file": tool_move_file,
