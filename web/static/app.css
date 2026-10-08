@@ -270,18 +270,159 @@ header{
 .act.err .nm{color:var(--err)}
 .act .el{color:var(--acc);opacity:.8}
 
-/* Живой индикатор — как «esc to interrupt» в оригинале */
-.thinking{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:13px;
-  padding:3px 0}
-.thinking .spin{width:12px;height:12px;border:2px solid var(--line2);
-  border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.thinking .step{font-family:var(--mono);font-size:11px;color:var(--faint);
-  margin-left:auto}
-/* Мигающий курсор в духе терминала */
-.thinking .caret{display:inline-block;width:7px;height:14px;background:var(--acc);
-  vertical-align:-2px;animation:blink 1.05s steps(2) infinite}
-@keyframes blink{50%{opacity:0}}
+/* Живой анимированный индикатор Claude Code (строка «Думаю…») */
+.thinking {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  color: var(--txt2) !important;
+  font-size: 13px !important;
+  font-family: var(--mono) !important;
+  padding: 6px 2px !important;
+  margin: 6px 0 !important;
+  width: 100% !important;
+  animation: fadeInThinking 0.2s ease-out !important;
+}
+
+@keyframes fadeInThinking {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Колёсико: гарантированно и непрерывно крутится 360° на 60fps */
+.thinking .spin,
+.spin {
+  display: inline-block !important;
+  width: 13px !important;
+  height: 13px !important;
+  min-width: 13px !important;
+  min-height: 13px !important;
+  box-sizing: border-box !important;
+  border-radius: 50% !important;
+  border: 2px solid rgba(255, 255, 255, 0.18) !important;
+  border-top-color: var(--acc) !important;
+  border-right-color: var(--acc-hi) !important;
+  animation: spinWheel 0.75s linear infinite !important;
+  -webkit-animation: spinWheel 0.75s linear infinite !important;
+  flex-shrink: 0 !important;
+  vertical-align: middle !important;
+  margin-right: 2px !important;
+}
+
+@keyframes spinWheel {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@-webkit-keyframes spinWheel {
+  0% { -webkit-transform: rotate(0deg); }
+  100% { -webkit-transform: rotate(360deg); }
+}
+
+/* Обёртка spin-wrap для совместимости */
+.thinking .spin-wrap {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0 !important;
+}
+
+/* Текст «Думаю» или текущего действия инструмента */
+.thinking .think-text {
+  color: var(--txt) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.1px !important;
+  display: inline-block !important;
+}
+
+/* Анимированные три прыгающие волной точки */
+.thinking .dots {
+  display: inline-flex !important;
+  align-items: baseline !important;
+  gap: 2.5px !important;
+  margin-left: 1px !important;
+  vertical-align: baseline !important;
+}
+
+.thinking .dots .dot {
+  display: inline-block !important;
+  font-family: var(--mono), monospace !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  color: var(--acc) !important;
+  animation: dotWave 1.2s ease-in-out infinite both !important;
+  -webkit-animation: dotWave 1.2s ease-in-out infinite both !important;
+  transform-origin: center bottom !important;
+}
+
+.thinking .dots .dot:nth-child(1) {
+  animation-delay: 0s !important;
+  -webkit-animation-delay: 0s !important;
+}
+.thinking .dots .dot:nth-child(2) {
+  animation-delay: 0.2s !important;
+  -webkit-animation-delay: 0.2s !important;
+}
+.thinking .dots .dot:nth-child(3) {
+  animation-delay: 0.4s !important;
+  -webkit-animation-delay: 0.4s !important;
+}
+
+@keyframes dotWave {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    transform: translateY(-4px);
+    opacity: 1;
+    color: var(--acc-hi);
+    text-shadow: 0 0 6px rgba(215, 119, 87, 0.9);
+  }
+}
+@-webkit-keyframes dotWave {
+  0%, 80%, 100% {
+    -webkit-transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    -webkit-transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* Мигающий терминальный курсор */
+.thinking .caret {
+  display: inline-block !important;
+  width: 5px !important;
+  height: 13px !important;
+  background: var(--acc) !important;
+  border-radius: 1px !important;
+  vertical-align: -2px !important;
+  margin-left: 3px !important;
+  animation: caretBlink 0.9s steps(2, start) infinite !important;
+  -webkit-animation: caretBlink 0.9s steps(2, start) infinite !important;
+}
+
+@keyframes caretBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@-webkit-keyframes caretBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Бейдж шага справа: «шаг 2 из 100» */
+.thinking .step {
+  font-family: var(--mono) !important;
+  font-size: 11.5px !important;
+  color: var(--dim) !important;
+  margin-left: auto !important;
+  white-space: nowrap !important;
+}
 
 /* Diff — зелёным добавление, красным удаление */
 .diffline{font-family:var(--mono);font-size:12px;line-height:1.55;
@@ -474,6 +615,84 @@ header{
 .imgview img{max-width:100%;border-radius:8px;border:1px solid var(--line);
   background:#fff}
 .imgview .cap{font-size:11.5px;color:var(--dim);text-align:center}
+
+/* Встроенные просмотрщики файлов: PDF, медиа, изображения */
+.file-view-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+.file-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.file-badge {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--txt);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.file-meta {
+  font-size: 11px;
+  color: var(--dim);
+}
+.file-btn {
+  margin-left: auto;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  color: var(--txt2);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  padding: 3px 9px;
+  border-radius: 6px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.file-btn + .file-btn {
+  margin-left: 6px;
+}
+.file-btn:hover {
+  background: var(--acc-dim);
+  border-color: var(--acc);
+  color: var(--acc-hi);
+}
+.pdf-frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+  border: none;
+  background: #2b2b2b;
+}
+.media-body {
+  padding: 24px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+.md-preview {
+  padding: 16px 20px;
+  overflow: auto;
+  line-height: 1.7;
+}
+
 .fp-foot{padding:7px 11px;border-top:1px solid var(--line);display:flex;gap:6px;
   flex-shrink:0;flex-wrap:wrap}
 
@@ -634,11 +853,19 @@ button.pulse::after{
   .composer-text-wrap textarea{min-height:22px;font-size:14px}
 }
 
-/* --- Отключаем анимации для людей, которым мешает --- */
+/* --- Отключаем анимации для людей, которым мешает (но индикатор работы агента сохраняем) --- */
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms !important;
     transition-duration:.01ms !important}
-  .spin{animation:none}
+  .thinking .spin,
+  .spin {
+    animation: spinWheel 0.75s linear infinite !important;
+    -webkit-animation: spinWheel 0.75s linear infinite !important;
+  }
+  .thinking .dots .dot {
+    animation: dotWave 1.2s ease-in-out infinite both !important;
+    -webkit-animation: dotWave 1.2s ease-in-out infinite both !important;
+  }
 }
 
 /* --- Повышенный контраст --- */
