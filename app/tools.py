@@ -1,7 +1,21 @@
-"""Инструменты агента: файлы, веб-поиск, выполнение кода."""
+"""Инструменты агента и системный промпт по официальному стандарту Claude Code.
+
+Набор инструментов:
+- bash: Выполнение команд терминала (git, pip, python, curl, тесты, скрипты).
+- view: Просмотр файлов с номерами строк и срезами.
+- edit: Хирургическая точечная замена блоков кода (old_str -> new_str).
+- write: Создание или перезапись файлов.
+- glob: Поиск файлов по маске.
+- grep: Поиск по содержимому файлов через регулярные выражения.
+- agent: Делегирование задач специализированным субагентам (researcher, coder, tester, devops, general).
+- todo: Ведение чеклиста задач.
+- web_search / fetch_url: Поиск и чтение информации в интернете.
+"""
 import ast
-import io
+import difflib
+import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -10,83 +24,22 @@ from pathlib import Path
 import httpx
 
 from . import config
-from . import infra as _infra
 from . import subagent as _subagent
-from . import project_state as _project_state
 
 WORKSPACE = config.WORKSPACE
 
 
 def _ws() -> Path:
-    """Папка активного проекта.
-
-    Читается при каждом вызове, а не хранится в константе: тогда
-    переключение проекта в интерфейсе сразу меняет рабочую папку,
-    без перезапуска сервера.
-    """
+    """Папка активного проекта."""
     return config.current_workspace()
 
 
-SYSTEM_PROMPT = """Ты — лёгкий автономный ИИ-агент. Работаешь в облаке на сервере.
-
-Твои возможности:
-- Создаёшь, читаешь и правишь файлы в рабочей папке проекта.
-- Автономно валидируешь и тестируешь код: инструменты `validate_code` и `run_test`.
-- Ищешь готовые репозитории и шаблоны на GitHub: инструмент `github_search`.
-- Скачиваешь и клонируешь проекты/шаблоны с GitHub в рабочую папку: инструмент `github_clone`.
-- Делегируешь задачи специализированным субагентам: инструмент `delegate_task` (роли: `researcher`, `coder`, `tester`, `custom`).
-- Ведёшь и помнишь архитектурный паспорт проекта: `project_state_get`, `project_state_update`.
-- Выгружаешь проект на GitHub: инструмент `github_sync` (автоматически создаёт репозиторий при необходимости и загружает все файлы проекта).
-- Управляешь сервером и деплоем на Render: инструменты `infra_deploy_project`, `infra_services`, `infra_deploy`, `infra_logs`, `infra_env`.
-- Сохраняешь и используешь API-ключи: `secret_set`, `secret_list`.
-- Выполняешь вычисления и проверяешь код через execute_code и run_python_file.
-- Ищешь информацию в интернете: web_search, fetch_url.
-- Сохраняешь файлы в S3 хранилище: cloud_upload.
-
-ГЛАВНЫЕ ПРАВИЛА:
-1. КРИТИЧЕСКИ ВАЖНО: НИКОГДА не обещай на словах («Хорошо, сейчас сделаю», «Я загрузил проект на GitHub», «Я развернул сервис»), ЕСЛИ ТЫ НЕ ВЫЗВАЛ СООТВЕТСТВУЮЩИЙ ИНСТРУМЕНТ!
-2. САМОПРОВЕРКА КОДА (SELF-CORRECTION):
-   - Если в ответе инструмента `write_file` или `edit_file` появилось предупреждение «⚠️ ВНИМАНИЕ (АВТОПРОВЕРКА КОДА)» — ТЫ ОБЯЗАН СЛЕДУЮЩИМ ЖЕ ШАГОМ ИСПРАВИТЬ ЕГО через `edit_file`! Никогда не оставляй сломанный код.
-   - После написания кода запускай `validate_code` или `run_test`, чтобы убедиться, что всё компилируется и работает без ошибок.
-   - Пользователю сообщай результат только тогда, когда код проверен и работает.
-3. АРХИТЕКТУРНЫЙ ПАСПОРТ ПРОЕКТА (PROJECT STATE):
-   - У каждого проекта есть архитектурный паспорт (цель, стек технологий, назначение файлов, принятые решения, статус).
-   - При старте нового проекта, согласовании архитектуры или смене стека ОБЯЗАТЕЛЬНО вызывай `project_state_update`!
-   - Это гарантирует, что ты никогда не забудешь суть проекта при долгой разработке.
-4. ДЕЛЕГИРОВАНИЕ СУБАГЕНТАМ (`delegate_task`):
-   - Для глубокого поиска информации, документации и библиотек вызывай субагента `researcher`.
-   - Для написания отдельных изолированных модулей или верстки вызывай субагента `coder`.
-   - Для тестирования, ревью и выявления ошибок вызывай субагента `tester`.
-   - Субагенты работают автономно в изолированном контексте и возвращают готовый результат.
-5. Если пользователь просит выгрузить, сохранить или обновить проект на GitHub — СРАЗУ ВЫЗЫВАЙ инструмент `github_sync` в первом же шаге!
-6. Если пользователь просит развернуть / настроить сервер или задеплоить проект — СРАЗУ ВЫЗЫВАЙ `infra_deploy_project` или `infra_deploy`!
-7. Для работы с GitHub НЕ пиши ручные скрипты git push через execute_code — используй готовый инструмент `github_sync`.
-8. Если задача требует нескольких шагов — выполняй их по очереди через инструменты, а не описывай планы вместо выполнения.
-9. Отвечай кратко, чётко, на языке пользователя, сообщая конкретные результаты и ссылки.
-10. СТРОГИЙ SMOKE-ТЕСТ (ЗАПРЕТ «СЛЕПОТЫ УСПЕХА»):
-    - При развертывании или обновлении веб-сервиса ТЫ ОБЯЗАН вызвать `verify_deployment_health` с URL сервиса перед тем, как отчитаться об успехе.
-    - ЕСЛИ сервис вернул ошибку, статус >= 400 или не отвечает — СТРОГО ЗАПРЕЩЕНО писать пользователю «Всё готово и работает!». Ты обязан посмотреть логи (`infra_logs`), исправить причину падения и повторить проверку!
-11. ДОВОДИ ЛЮБУЮ РАБОТУ ДО ПОЛНОГО КОНЦА (НЕ ОСТАНАВЛИВАЙСЯ НА ПОЛПУТИ):
-    - У тебя НЕТ жесткого ограничения на количество шагов (бюджет операций динамически расширяется при необходимости).
-    - Если задача объемная (создание нескольких модулей, верстка, тестирование, деплой) — делай ВСЕ этапы последовательно до 100% готовности.
-    - Никогда не бросай задачу со словами «я сделал часть, остальное доделайте сами». Сделай всё до конца, проверь тестами и отчитайся о финальном результате.
-"""
-
-_DANGEROUS = re.compile(
-    r"(rm\s+-rf|:\(\)\s*\{|mkfs|dd\s+if=|shutdown|reboot|"
-    r"curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh)",
-    re.IGNORECASE,
-)
-
-SEARCH_URL = "https://html.duckduckgo.com/html/?q={}"
-
-
 def _safe_path(rel: str, project: str = "") -> Path:
-    """Путь внутри рабочей папки — защита от выхода за её пределы."""
+    """Путь внутри рабочей папки проекта с защитой от directory traversal."""
     if not rel or not rel.strip():
         raise ValueError("Путь не указан")
     if ".." in rel or rel.startswith("/") or ":" in rel:
-        raise ValueError("Недопустимый путь")
+        raise ValueError("Недопустимый путь (выход за пределы проекта)")
     base = config.project_dir(project) if project else _ws()
     full = (base / rel).resolve()
     if not str(full).startswith(str(base.resolve())):
@@ -94,7 +47,7 @@ def _safe_path(rel: str, project: str = "") -> Path:
     return full
 
 
-# Расширения, которые браузер умеет показать как картинку
+# Расширения изображений для веб-интерфейса
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}
 IMAGE_MIME = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -104,31 +57,29 @@ IMAGE_MIME = {
 
 
 def is_image(path: str) -> bool:
-    """Картинка ли это файла - по расширению."""
     return Path(path).suffix.lower() in IMAGE_EXT
 
 
 def image_mime(path: str) -> str:
-    """Content-Type для картинки."""
     return IMAGE_MIME.get(Path(path).suffix.lower(), "application/octet-stream")
 
 
-# ---------------- Валидация и автопроверка кода ----------------
+# ---------------- Синтаксическая валидация ----------------
 
 def _lint_content(path: str, content: str) -> str | None:
-    """Проверяет синтаксис файла на лету при сохранении/редактировании."""
+    """Быстрая валидация синтаксиса при сохранении."""
     ext = Path(path).suffix.lower()
     if ext == ".py":
         try:
             ast.parse(content, filename=path)
         except SyntaxError as e:
             line_text = f"\n   Строка {e.lineno}: {e.text.strip()}" if e.text else ""
-            return f"Синтаксическая ошибка Python (SyntaxError): строка {e.lineno}, символ {e.offset}: {e.msg}{line_text}"
+            return f"SyntaxError в строке {e.lineno}, символ {e.offset}: {e.msg}{line_text}"
     elif ext == ".json":
         try:
             json.loads(content)
         except json.JSONDecodeError as e:
-            return f"Ошибка структуры JSON (JSONDecodeError): строка {e.lineno}, символ {e.colno}: {e.msg}"
+            return f"JSONDecodeError: строка {e.lineno}, символ {e.colno}: {e.msg}"
     elif ext in (".js", ".ts", ".jsx", ".tsx"):
         brackets = {"(": ")", "[": "]", "{": "}"}
         stack = []
@@ -141,296 +92,263 @@ def _lint_content(path: str, content: str) -> str | None:
                         return f"Лишняя закрывающая скобка '{ch}' на строке {line_num}"
                     top, start_line = stack.pop()
                     if brackets[top] != ch:
-                        return f"Несоответствие скобок: открыта '{top}' на строке {start_line}, а закрыта '{ch}' на строке {line_num}"
+                        return f"Несоответствие скобок: открыта '{top}' на строке {start_line}, закрыта '{ch}' на строке {line_num}"
         if stack:
             top, start_line = stack[-1]
             return f"Незакрытая скобка '{top}' на строке {start_line}"
     return None
 
 
-# ---------------- Файлы ----------------
+# ---------------- Инструменты Claude Code ----------------
 
-def tool_write_file(path: str, content: str) -> str:
-    """Создаёт или перезаписывает текстовый файл в рабочей папке."""
+def tool_bash(command: str, timeout: int = 60) -> str:
+    """Выполняет команду Bash в рабочей папке проекта."""
+    command = (command or "").strip()
+    if not command:
+        return "Ошибка: пустая команда."
+
+    # Собираем окружение (наследуем системное + переменные из .env)
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    ws_dir = _ws()
+    try:
+        proc = subprocess.run(
+            ["bash", "-c", command],
+            cwd=str(ws_dir),
+            capture_output=True,
+            text=True,
+            timeout=max(5, min(timeout, 600)),
+            env=env,
+        )
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        out = []
+        if stdout:
+            out.append(stdout)
+        if stderr:
+            out.append(f"[stderr]\n{stderr}")
+        combined = "\n".join(out) if out else "(нет вывода)"
+        
+        # Обрезаем только при экстремально больших логах (> 32 КБ)
+        if len(combined) > 32000:
+            combined = combined[:16000] + f"\n...[вывод сокращен, всего {len(combined)} символов]...\n" + combined[-16000:]
+            
+        status_note = f"[Exit code: {proc.returncode}]" if proc.returncode != 0 else ""
+        return f"{status_note}\n{combined}".strip()
+    except subprocess.TimeoutExpired:
+        return f"Таймаут выполнения команды ({timeout} сек)."
+    except Exception as exc:
+        return f"Ошибка запуска bash: {exc}"
+
+
+def tool_view(path: str, view_range: list[int] | None = None) -> str:
+    """Читает файл с номерами строк (1-based) и поддержкой диапазонов [start, end]."""
+    try:
+        full = _safe_path(path)
+        if not full.exists():
+            return f"Файл не найден: {path}"
+        if full.is_dir():
+            entries = sorted(full.iterdir())
+            lines = [f"Директория: {path}/"]
+            for e in entries[:150]:
+                lines.append(f"  {'[DIR] ' if e.is_dir() else '      '}{e.name}")
+            return "\n".join(lines)
+
+        if is_image(str(full)):
+            size = full.stat().st_size
+            if full.suffix.lower() == ".svg":
+                text = full.read_text(encoding="utf-8", errors="replace")
+                return f"SVG-изображение {path} ({size} байт):\n{text[:2000]}"
+            return f"Изображение {path} ({size} байт, mime: {image_mime(str(full))})."
+
+        raw = full.read_text(encoding="utf-8", errors="replace")
+        all_lines = raw.splitlines()
+        total_lines = len(all_lines)
+
+        start = 1
+        end = total_lines
+        if view_range and len(view_range) >= 2:
+            start = max(1, view_range[0])
+            end = min(total_lines, view_range[1])
+
+        out = []
+        for i in range(start, end + 1):
+            line_content = all_lines[i - 1]
+            out.append(f"{i:>5} | {line_content}")
+
+        header = f"=== {path} (строки {start}-{end} из {total_lines}) ===\n"
+        return header + "\n".join(out)
+    except Exception as exc:
+        return f"Ошибка чтения {path}: {exc}"
+
+
+def tool_edit(path: str, old_str: str, new_str: str) -> str:
+    """Точечно заменяет фрагмент текста old_str на new_str в файле."""
+    try:
+        full = _safe_path(path)
+        if not full.is_file():
+            return f"Файл не найден: {path}"
+
+        content = full.read_text(encoding="utf-8", errors="replace")
+        count = content.count(old_str)
+
+        if count == 0:
+            lines = content.splitlines()
+            target_first = (old_str.splitlines() or [""])[0].strip()
+            close_matches = difflib.get_close_matches(target_first, [ln.strip() for ln in lines], n=1, cutoff=0.6)
+            hint = f"\nВозможно вы имели в виду строку: «{close_matches[0]}»" if close_matches else ""
+            return f"Фрагмент old_str не найден в файле {path}.{hint}\nПроверьте отступы и символы через view."
+
+        if count > 1:
+            return (
+                f"Фрагмент old_str встречается в файле {path} {count} раз. "
+                f"Укажите больше окружающих строк для однозначной замены."
+            )
+
+        updated = content.replace(old_str, new_str, 1)
+        full.write_text(updated, encoding="utf-8")
+
+        lint_err = _lint_content(path, updated)
+        lint_note = f"\n⚠️ Замечена синтаксическая ошибка: {lint_err}" if lint_err else ""
+        return f"✅ Файл {path} успешно обновлен.{lint_note}"
+    except Exception as exc:
+        return f"Ошибка редактирования: {exc}"
+
+
+def tool_write(path: str, content: str) -> str:
+    """Создаёт или перезаписывает файл в проекте."""
     try:
         full = _safe_path(path)
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
         size = len(content.encode("utf-8"))
-        try:
-            _project_state.auto_record_file(path)
-        except Exception:
-            pass
-        res = f"Записан файл {path} ({size} байт)."
         lint_err = _lint_content(path, content)
-        if lint_err:
-            res += (
-                f"\n\n⚠️ ВНИМАНИЕ (АВТОПРОВЕРКА КОДА):\n"
-                f"{lint_err}\n"
-                f"КРИТИЧЕСКИ ВАЖНО: Код содержит ошибку! Немедленно исправь её в следующем шаге через edit_file или write_file!"
-            )
-        else:
-            res += " Автопроверка синтаксиса пройдена (ошибок нет)."
-        return res
+        lint_note = f"\n⚠️ Замечена синтаксическая ошибка: {lint_err}" if lint_err else ""
+        return f"✅ Записан файл {path} ({size} байт).{lint_note}"
     except Exception as exc:
         return f"Ошибка записи: {exc}"
 
 
-def tool_view_image(path: str) -> str:
-    """Описывает изображение: размеры и содержимое как текст, если это SVG.
-
-    Модель не умеет смотреть картинки напрямую, поэтому для растровых
-    файлов возвращаем метаданные, а для SVG - текстовое содержимое,
-    по которому можно понять, что нарисовано.
-    """
+def tool_glob(pattern: str, path: str = ".") -> str:
+    """Ищет файлы по маске (например: '*.py', 'src/**/*.js')."""
     try:
-        full = _safe_path(path)
-        if not full.is_file():
-            return f"Файл не найден: {path}"
-        if not is_image(path):
-            return f"{path} - не картинка (расширение {Path(path).suffix})"
-
-        size = full.stat().st_size
-        if full.suffix.lower() == ".svg":
-            text = full.read_text(encoding="utf-8", errors="replace")
-            labels = re.findall(r">([^<>]{2,60})<", text)
-            shapes = len(re.findall(r"<(rect|circle|ellipse|path|line|polygon|polyline)",
-                                    text))
-            parts = [f"SVG-изображение {path} ({size} Б)",
-                     f"фигур: {shapes}"]
-            if labels:
-                parts.append("текст на картинке: " + "; ".join(labels[:25]))
-            return "\n".join(parts)
-
-        dims = ""
-        try:
-            from PIL import Image  # опционально
-            with Image.open(full) as im:
-                dims = f", размер {im.width}x{im.height}, режим {im.mode}"
-        except Exception:
-            # Без PIL размеры читаем вручную для PNG
-            if full.suffix.lower() == ".png":
-                try:
-                    head = full.read_bytes()[16:24]
-                    dims = f", размер {int.from_bytes(head[:4], 'big')}" \
-                           f"x{int.from_bytes(head[4:], 'big')}"
-                except Exception:
-                    pass
-        return (f"Картинка {path} ({size} Б{dims}). "
-                f"Растровое изображение - содержимое я описать не могу, "
-                f"скажи пользователю открыть его в панели файлов.")
-    except Exception as exc:
-        return f"Ошибка просмотра: {exc}"
-
-
-_EDIT_FAIL_COUNTS: dict[str, int] = {}
-
-
-def tool_edit_file(path: str, old_text: str, new_text: str,
-                   replace_all: bool = False) -> str:
-    """Точечно меняет текст в файле: заменяет old_text на new_text."""
-    try:
-        full = _safe_path(path)
-        if not full.is_file():
-            return f"Файл не найден: {path}"
-        content = full.read_text(encoding="utf-8", errors="replace")
-
-        if old_text not in content:
-            # Ведём учёт неудач для предотвращения зацикливания
-            fail_key = f"{config.get_current_project()}:{path}"
-            _EDIT_FAIL_COUNTS[fail_key] = _EDIT_FAIL_COUNTS.get(fail_key, 0) + 1
-            fails = _EDIT_FAIL_COUNTS[fail_key]
-
-            hint = _closest_line(content, old_text)
-            extra = (f"\nБлижайшая строка: {hint}"
-                     if hint else "")
-
-            if fails >= 2:
-                return (
-                    f"⛔ КРИТИЧЕСКАЯ ОШИБКА: Текст для замены не найден в {path} уже {fails} раза подряд!\n"
-                    f"ЗАПРЕЩЕНО повторять вызов edit_file для этого файла — это ведёт к зацикливанию.\n"
-                    f"ДЕЙСТВИЕ: Используй инструмент tool_write_file для полной перезаписи файла целиком "
-                    f"или tool_read_file для чтения актуального содержимого."
-                )
-
-            return (
-                f"Текст для замены не найден в {path}.{extra}\n"
-                f"Подсказка: проверь точные отступы и пробелы или используй write_file."
-            )
-
-        # Сбрасываем счётчик неудач при успешной замене
-        fail_key = f"{config.get_current_project()}:{path}"
-        _EDIT_FAIL_COUNTS.pop(fail_key, None)
-
-        count = content.count(old_text)
-        content = content.replace(old_text, new_text) if replace_all \
-            else content.replace(old_text, new_text, 1)
-        full.write_text(content, encoding="utf-8")
-
-        res = (f"Изменён {path}: заменено "
-               f"{'все вхождения' if replace_all else '1 место'} "
-               f"(всего было {count}).")
-        lint_err = _lint_content(path, content)
-        if lint_err:
-            res += (
-                f"\n\n⚠️ ВНИМАНИЕ (АВТОПРОВЕРКА КОДА):\n"
-                f"{lint_err}\n"
-                f"КРИТИЧЕСКИ ВАЖНО: В коде осталась или появилась ошибка! Немедленно исправь её в следующем шаге!"
-            )
-        else:
-            res += " Автопроверка синтаксиса пройдена (ошибок нет)."
-        return res
-    except Exception as exc:
-        return f"Ошибка правки: {exc}"
-
-
-def _closest_line(content: str, needle: str, limit: int = 120) -> str:
-    """Ищет строку, похожую на искомую - для подсказки при ошибке."""
-    import difflib
-    # Ищем по первой непустой строке запроса: пользователь может прислать
-    # многострочный кусок, а совпадение искать надо по первой строке.
-    lines_in = [ln.strip() for ln in (needle or "").splitlines() if ln.strip()]
-    needle = lines_in[0] if lines_in else ""
-    if not needle or len(needle) < 3:
-        return ""
-    matches = difflib.get_close_matches(needle, content.splitlines(), n=1,
-                                         cutoff=0.5)
-    return matches[0][:limit] if matches else ""
-
-
-def tool_grep(pattern: str, glob: str = "*", ignore_case: bool = False,
-              max_results: int = 40) -> str:
-    """Ищет текст по файлам проекта. Возвращает совпадения с номерами строк."""
-    try:
-        try:
-            rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
-        except re.error as exc:
-            return f"Некорректное регулярное выражение: {exc}"
-
-        hits: list[str] = []
-        skipped = {"binary": 0, "big": 0}
-        for path in _ws().rglob(glob):
-            if not path.is_file() or len(hits) >= max_results:
+        base = _safe_path(path)
+        matches = []
+        for p in base.rglob("*"):
+            if any(part in (".git", "__pycache__", ".venv", "node_modules") for part in p.parts):
                 continue
-            if any(part in (".git", "__pycache__", ".venv")
-                   for part in path.parts):
+            rel = p.relative_to(_ws()).as_posix()
+            if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(p.name, pattern):
+                matches.append(f"{'[DIR] ' if p.is_dir() else '      '}{rel}")
+            if len(matches) >= 5000:
+                matches.append(f"...и ещё файлы (показано 5000 совпадений)")
+                break
+        if not matches:
+            return f"Файлы по маске '{pattern}' не найдены."
+        return "\n".join(matches)
+    except Exception as exc:
+        return f"Ошибка glob: {exc}"
+
+
+def tool_grep(pattern: str, path: str = ".", include: str = "") -> str:
+    """Ищет регулярное выражение по содержимому файлов."""
+    try:
+        base = _safe_path(path)
+        rx = re.compile(pattern)
+        hits = []
+        for p in base.rglob("*"):
+            if not p.is_file():
                 continue
-            if path.suffix.lower() in IMAGE_EXT:
-                skipped["binary"] += 1
+            if any(part in (".git", "__pycache__", ".venv", "node_modules") for part in p.parts):
+                continue
+            if include and not fnmatch.fnmatch(p.name, include):
+                continue
+            if is_image(str(p)) or p.stat().st_size > 5_000_000:
                 continue
             try:
-                if path.stat().st_size > 2_000_000:
-                    skipped["big"] += 1
-                    continue
-                text = path.read_text(encoding="utf-8", errors="ignore")
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                for num, line in enumerate(text.splitlines(), 1):
+                    if rx.search(line):
+                        rel = p.relative_to(_ws()).as_posix()
+                        hits.append(f"{rel}:{num}: {line.strip()[:140]}")
+                        if len(hits) >= 1000:
+                            break
             except Exception:
                 continue
-
-            for num, line in enumerate(text.splitlines(), 1):
-                if rx.search(line):
-                    # Путь всегда со слэшами: на Windows str(Path) даёт
-                    # обратные, а модель ищет по прямым.
-                    rel = path.relative_to(_ws()).as_posix()
-                    hits.append(f"{rel}:{num}: {line.strip()[:150]}")
-                    if len(hits) >= max_results:
-                        break
-
+            if len(hits) >= 1000:
+                hits.append(f"...показаны первые 1000 совпадений")
+                break
         if not hits:
-            note = ""
-            if skipped["binary"] or skipped["big"]:
-                note = (f" Пропущено: {skipped['binary']} картинок, "
-                        f"{skipped['big']} больших файлов.")
-            return f"Ничего не найдено по запросу «{pattern}».{note}"
+            return f"Ничего не найдено по регулярному выражению «{pattern}»."
+        return "\n".join(hits)
+    except Exception as exc:
+        return f"Ошибка grep: {exc}"
 
-        note = ""
-        if len(hits) >= max_results:
-            note = f"\nПоказаны первые {max_results} совпадений."
-        return "\n".join(hits) + note
+
+def tool_agent(role: str, task: str, model: str = "") -> str:
+    """Запускает специализированного субагента (researcher, coder, tester, devops, general)."""
+    return _subagent.run_subagent(role=role, task=task, model=model)
+
+
+_SESSION_TODOS: dict[str, list[str]] = {}
+
+
+def tool_todo(action: str = "get", tasks: list[str] | None = None) -> str:
+    """Управляет чеклистом задач текущей сессии (get, set, add, clear)."""
+    proj = config.get_current_project()
+    current = _SESSION_TODOS.setdefault(proj, [])
+    action = (action or "get").lower()
+
+    if action == "set" and tasks is not None:
+        _SESSION_TODOS[proj] = [str(t) for t in tasks]
+        current = _SESSION_TODOS[proj]
+    elif action == "add" and tasks:
+        current.extend([str(t) for t in tasks])
+    elif action == "clear":
+        _SESSION_TODOS[proj] = []
+        return "План задач очищен."
+
+    if not current:
+        return "Список задач пуст."
+    return "Текущий список задач:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(current))
+
+
+def tool_web_search(query: str) -> str:
+    """Ищет информацию в интернете."""
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as c:
+            resp = c.get("https://html.duckduckgo.com/html/", params={"q": query})
+        html = resp.text
+        titles = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
+        links = re.findall(r'class="result__a"[^>]*href="(.*?)"', html, re.DOTALL)
+        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
+
+        def clean(s: str) -> str:
+            return re.sub(r"<.*?>", "", s).strip()
+
+        out = []
+        for i, title in enumerate(titles[:5]):
+            snip = clean(snippets[i]) if i < len(snippets) else ""
+            url = links[i] if i < len(links) else ""
+            out.append(f"{i+1}. {clean(title)}\n   {url}\n   {snip[:250]}")
+        return "\n\n".join(out) if out else "Ничего не найдено."
     except Exception as exc:
         return f"Ошибка поиска: {exc}"
 
 
-def tool_read_file(path: str) -> str:
-    """Читает текстовый файл из рабочей папки."""
+def tool_fetch_url(url: str) -> str:
+    """Загружает страницу и возвращает текст без тегов."""
     try:
-        full = _safe_path(path)
-        if not full.exists():
-            return f"Файл не найден: {path}"
-        data = full.read_text(encoding="utf-8", errors="replace")
-        if len(data) > 40000:
-            return f"{path}\n\n[файл обрезан до 40000 символов]\n{data[:40000]}"
-        return f"{path}\n\n{data}"
+        with httpx.Client(timeout=15, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as c:
+            resp = c.get(url)
+        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", resp.text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<.*?>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:12000] if text else "Пустая страница."
     except Exception as exc:
-        return f"Ошибка чтения: {exc}"
-
-
-def tool_list_files(directory: str = ".") -> str:
-    """Показывает список файлов и папок в рабочей директории."""
-    try:
-        full = _safe_path(directory or ".")
-        if not full.exists():
-            return f"Директория не найдена: {directory}"
-        entries = sorted(full.iterdir())
-        if not entries:
-            return f"{directory} — пусто"
-        lines = []
-        for e in entries[:200]:
-            if e.is_dir():
-                lines.append(f"[dir]  {e.name}/")
-            else:
-                lines.append(f"       {e.name} ({e.stat().st_size} Б)")
-        return "\n".join(lines)
-    except Exception as exc:
-        return f"Ошибка: {exc}"
-
-
-def tool_delete_file(path: str) -> str:
-    """Удаляет файл из рабочей папки."""
-    try:
-        full = _safe_path(path)
-        if full.is_dir():
-            return "Это папка - используй delete_dir"
-        if not full.exists():
-            return f"Файл не найден: {path}"
-        full.unlink()
-        return f"Удалён файл {path}"
-    except Exception as exc:
-        return f"Ошибка удаления: {exc}"
-
-
-# ---------------- Папки ----------------
-
-def tool_make_dir(path: str) -> str:
-    """Создаёт папку вместе с промежуточными."""
-    try:
-        full = _safe_path(path)
-        if full.is_dir():
-            return f"Папка уже существует: {path}"
-        if full.exists():
-            return f"По этому пути уже есть файл: {path}"
-        full.mkdir(parents=True, exist_ok=True)
-        return f"Создана папка: {path}"
-    except Exception as exc:
-        return f"Ошибка создания папки: {exc}"
-
-
-def tool_delete_dir(path: str, recursive: bool = False) -> str:
-    """Удаляет папку. Непустую - только с recursive."""
-    try:
-        full = _safe_path(path)
-        if not full.is_dir():
-            return f"Это не папка: {path}"
-        if any(full.iterdir()) and not recursive:
-            return (f"Папка {path} не пустая. Повтори с recursive=true, "
-                    f"если нужно удалить её целиком.")
-        import shutil
-        if recursive:
-            shutil.rmtree(full)
-        else:
-            full.rmdir()
-        return f"Удалена папка: {path}"
-    except Exception as exc:
-        return f"Ошибка удаления папки: {exc}"
+        return f"Ошибка загрузки страницы: {exc}"
 
 
 def tool_move_file(source: str, destination: str) -> str:
@@ -444,618 +362,183 @@ def tool_move_file(source: str, destination: str) -> str:
         if dst.is_dir():
             dst = dst / src.name
         src.replace(dst)
-        return f"Перемещено: {source} -> {dst.relative_to(_ws())}"
+        return f"Перемещено: {source} -> {destination}"
     except Exception as exc:
         return f"Ошибка перемещения: {exc}"
 
 
-def tool_tree(path: str = ".", max_depth: int = 3) -> str:
-    """Показывает дерево файлов и папок."""
-    try:
-        root = _safe_path(path or ".")
-        if not root.exists():
-            return f"Не найдено: {path}"
-
-        out = [f"{path or '.'}/"]
-
-        def walk(d, depth: int) -> None:
-            if depth > max_depth:
-                out.append("  " * depth + "...")
-                return
-            try:
-                entries = sorted(d.iterdir(),
-                                 key=lambda p: (not p.is_dir(), p.name.lower()))
-            except Exception:
-                return
-            for e in entries:
-                indent = "  " * depth + ("+-- " if depth else "|   ")
-                if e.is_dir():
-                    out.append(f"{indent}{e.name}/")
-                    walk(e, depth + 1)
-                else:
-                    out.append(f"{indent}{e.name} ({e.stat().st_size} Б)")
-
-        walk(root, 1)
-        return "\n".join(out[:400])
-    except Exception as exc:
-        return f"Ошибка: {exc}"
-
-
-# ---------------- Выполнение кода ----------------
-
-def tool_execute_code(code: str) -> str:
-    """Выполняет Python-код и возвращает результат. Для вычислений и проверки."""
-    if _DANGEROUS.search(code):
-        return "Отклонено: код содержит опасную конструкцию"
-
-    import concurrent.futures
-    import contextlib
-    import os
-
-    # Предотвращаем интерактивные окна git и авторизации
-    os.environ["GIT_TERMINAL_PROMPT"] = "0"
-    os.environ["GIT_ASKPASS"] = ""
-
-    def _run():
-        buf = io.StringIO()
-        ws_path = str(_ws().resolve())
-        if ws_path not in sys.path:
-            sys.path.insert(0, ws_path)
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            exec(  # noqa: S102 - намеренный sandbox на уровне строк
-                compile(code, "<agent>", "exec"),
-                {"__name__": "__main__"},
-            )
-        return buf.getvalue()
-
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_run)
-            try:
-                out = future.result(timeout=25.0)
-                return out[-8000:] if out else "Код выполнен, вывода нет"
-            except concurrent.futures.TimeoutError:
-                return "Ошибка: выполнение кода прервано по таймауту (25 сек). Код заблокировался или зациклился."
-    except Exception:
-        import traceback
-        return traceback.format_exc()[-3000:]
-
-
-def tool_run_python_file(path: str) -> str:
-    """Запускает существующий Python-файл из рабочей папки."""
-    try:
-        full = _safe_path(path)
-        if not full.exists():
-            return f"Файл не найден: {path}"
-        proc = subprocess.run(
-            [sys.executable, str(full)], cwd=str(_ws()),
-            capture_output=True, text=True, timeout=120,
-        )
-        output = (proc.stdout or "") + (proc.stderr or "")
-        return f"[код {proc.returncode}]\n{output[-8000:]}"
-    except subprocess.TimeoutExpired:
-        return "Таймаут выполнения (120 сек)"
-    except Exception as exc:
-        return f"Ошибка запуска: {exc}"
-
-
-def _check_missing_requirements(ws: Path) -> list[str]:
-    """Сверяет сторонние импорты в .py файлах с зависимостями в requirements.txt."""
-    req_file = ws / "requirements.txt"
-    known_packages: set[str] = set()
-    if req_file.exists():
-        try:
-            for line in req_file.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    pkg = re.split(r"[><=~!;]", line)[0].strip().lower().replace("-", "_")
-                    if pkg:
-                        known_packages.add(pkg)
-        except Exception:
-            pass
-
-    # Маппинг частых модулей на их имена в PyPI / requirements.txt
-    PKG_MAP = {
-        "dotenv": "python_dotenv",
-        "jwt": "pyjwt",
-        "google.genai": "google_genai",
-        "PIL": "pillow",
-        "yaml": "pyyaml",
-        "bs4": "beautifulsoup4",
-        "psycopg2": "psycopg2_binary",
-    }
-
-    # Стандартная библиотека Python
-    stdlib = getattr(sys, "stdlib_module_names", set())
-
-    missing: set[str] = set()
-    for py_path in ws.rglob("*.py"):
-        if any(part in (".git", "__pycache__", ".venv", "venv", "node_modules") for part in py_path.parts):
-            continue
-        try:
-            tree = ast.parse(py_path.read_text(encoding="utf-8", errors="replace"), filename=str(py_path))
-        except Exception:
-            continue
-
-        for node in ast.walk(tree):
-            top_mod = None
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    top_mod = alias.name.split(".")[0]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                top_mod = node.module.split(".")[0]
-
-            if top_mod and top_mod not in stdlib and not (ws / f"{top_mod}.py").exists() and not (ws / top_mod).is_dir():
-                normalized = PKG_MAP.get(top_mod, top_mod.lower().replace("-", "_"))
-                if normalized not in known_packages and top_mod.lower() not in known_packages:
-                    missing.add(top_mod)
-
-    return sorted(missing)
-
-
-def tool_validate_code(path: str = "") -> str:
-    """Проверяет синтаксис файлов проекта (Python, JSON, JS/TS) и сверяет requirements.txt.
-    Если path указан — проверяет конкретный файл.
-    Если path пустой или '.' — сканирует все файлы проекта и проверяет зависимости.
-    """
-    ws = _ws()
-    files_to_check: list[Path] = []
-    target = (path or "").strip()
-    if target and target != ".":
-        try:
-            full = _safe_path(target)
-            if not full.exists():
-                return f"Файл не найден: {target}"
-            files_to_check.append(full)
-        except Exception as exc:
-            return f"Неверный путь: {exc}"
-    else:
-        for p in ws.rglob("*"):
-            if p.is_file() and p.suffix.lower() in (".py", ".json", ".js", ".ts", ".jsx", ".tsx") and not any(part in (".git", "__pycache__", ".venv", "venv", "node_modules") for part in p.parts):
-                files_to_check.append(p)
-
-    if not files_to_check:
-        return "Нет файлов с кодом для проверки синтаксиса."
-
-    errors: list[str] = []
-    passed = 0
-    for f in files_to_check:
-        try:
-            rel = f.relative_to(ws).as_posix()
-        except Exception:
-            rel = f.name
-        try:
-            content = f.read_text(encoding="utf-8", errors="replace")
-            err = _lint_content(rel, content)
-            if err:
-                errors.append(f"❌ {rel}:\n   {err}")
-            else:
-                passed += 1
-        except Exception as exc:
-            errors.append(f"❌ {rel}: не удалось прочитать ({exc})")
-
-    # Сверка requirements.txt при полном сканировании
-    dep_warning = ""
-    if not target or target == ".":
-        missing_pkgs = _check_missing_requirements(ws)
-        if missing_pkgs:
-            dep_warning = (
-                f"\n\n📦 ПРЕДУПРЕЖДЕНИЕ ПО ЗАВИСИМОСТЯМ:\n"
-                f"В Python-коде используются внешние пакеты, отсутствующие в requirements.txt:\n"
-                + "\n".join(f"   - {pkg}" for pkg in missing_pkgs) +
-                f"\nКРИТИЧНО: Добавь их в requirements.txt перед деплоем на Render, иначе сервер упадет с ModuleNotFoundError!"
-            )
-
-    if not errors:
-        return f"✅ Все проверенные файлы ({passed}) синтаксически корректны, синтаксических ошибок нет!{dep_warning}"
-    return f"⚠️ Обнаружены синтаксические ошибки ({len(errors)} файлов из {len(files_to_check)}):\n\n" + "\n\n".join(errors) + f"{dep_warning}\n\nНемедленно исправь указанные ошибки через edit_file или write_file!"
-
-
-def tool_run_test(target: str = "", args: str = "") -> str:
-    """Запускает автотесты проекта через pytest или unittest.
-    Возвращает статус прохождения и стек-трейс при падении.
-    """
-    ws = _ws()
-    cmd = [sys.executable, "-m", "pytest"]
-    try:
-        import pytest  # noqa: F401
-    except ImportError:
-        cmd = [sys.executable, "-m", "unittest"]
-
-    t = (target or "").strip()
-    if t:
-        cmd.append(t)
-    a = (args or "").strip()
-    if a:
-        cmd.extend(a.split())
-
-    try:
-        proc = subprocess.run(
-            cmd, cwd=str(ws), capture_output=True, text=True, timeout=60,
-        )
-        out = (proc.stdout or "") + (proc.stderr or "")
-        if proc.returncode == 0:
-            return f"✅ Все тесты успешно пройдены!\n{out[-3000:]}"
-        return (
-            f"❌ Тесты завершились с ошибками (код возврата {proc.returncode}):\n{out[-5000:]}\n\n"
-            f"Проанализируй ошибку выше и исправь код через edit_file!"
-        )
-    except subprocess.TimeoutExpired:
-        return "Таймаут выполнения тестов (60 сек)"
-    except Exception as exc:
-        return f"Ошибка запуска тестов: {exc}"
-
-
-# ---------------- Веб ----------------
-
-def tool_web_search(query: str, max_results: int = 5) -> str:
-    """Ищет информацию в интернете и возвращает сниппеты результатов."""
-    try:
-        with httpx.Client(timeout=20, follow_redirects=True,
-                          headers={"User-Agent": "Mozilla/5.0 (agent)"}) as c:
-            resp = c.get("https://html.duckduckgo.com/html/",
-                         params={"q": query})
-        html = resp.text
-        titles = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
-        links = re.findall(r'class="result__a"[^>]*href="(.*?)"', html, re.DOTALL)
-        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
-
-        def clean(s: str) -> str:
-            return re.sub(r"<.*?>", "", s).strip()
-
-        out = []
-        for i, title in enumerate(titles[:max_results]):
-            snippet = clean(snippets[i]) if i < len(snippets) else ""
-            url = links[i] if i < len(links) else ""
-            out.append(f"{i + 1}. {clean(title)}\n   {url}\n   {snippet[:300]}")
-        return "\n\n".join(out) if out else "Ничего не найдено"
-    except Exception as exc:
-        return f"Ошибка поиска: {exc}"
-
-
-def tool_fetch_url(url: str) -> str:
-    """Открывает URL и возвращает текст страницы без HTML-разметки."""
-    try:
-        with httpx.Client(timeout=20, follow_redirects=True,
-                          headers={"User-Agent": "Mozilla/5.0 (agent)"}) as c:
-            resp = c.get(url)
-        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", resp.text,
-                      flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<.*?>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text[:15000] if text else "Пустая страница"
-    except Exception as exc:
-        return f"Ошибка загрузки: {exc}"
-
-
-def tool_cloud_upload(filename: str) -> str:
-    """Выгружает файл из рабочей папки в облачное хранилище Storj S3."""
-    from . import storage
-    try:
-        full = _safe_path(filename)
-        if not full.exists():
-            return f"Файл не найден: {filename}"
-        key = f"workspace/{filename}"
-        storage.upload_file(key, str(full))
-        return f"Выгружено в облако: {key} ({full.stat().st_size} Б)"
-    except Exception as exc:
-        return f"Ошибка выгрузки: {exc}"
-
-
-def tool_verify_deployment_health(url: str, expected_status: int = 200, timeout_sec: int = 25) -> str:
-    """Выполняет реальный HTTP Smoke-тест задеплоенного сервиса.
-    ОБЯЗАТЕЛЕН к вызову перед завершением задачи деплоя.
-    Если сервис возвращает ошибку или недоступен — запрещено рапортовать об успехе!
-    """
-    url = (url or "").strip()
-    if not url:
-        return "Ошибка: URL не указан для верификации."
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = f"https://{url}"
-
-    try:
-        with httpx.Client(timeout=timeout_sec, follow_redirects=True) as client:
-            resp = client.get(url)
-            status = resp.status_code
-            snippet = resp.text[:400].strip()
-
-            if status == expected_status or (expected_status == 200 and status in (200, 301, 302, 307, 308)):
-                return (
-                    f"✅ ВЕРИФИКАЦИЯ ПРОЙДЕНА (HTTP {status})!\n"
-                    f"Сервис по адресу {url} отвечает и работает корректно.\n"
-                    f"Фрагмент ответа: {snippet[:150]}"
-                )
-            else:
-                return (
-                    f"❌ ВЕРИФИКАЦИЯ ПРОВАЛЕНА: Сервер вернул HTTP {status} вместо ожидаемого {expected_status}!\n"
-                    f"Тело ответа:\n{snippet}\n\n"
-                    f"КРИТИЧЕСКИ ВАЖНО: ЗАПРЕЩЕНО говорить пользователю, что всё работает! "
-                    f"Сервер упал или возвращает ошибку. Проверь логи (infra_logs), найди причину и исправь её!"
-                )
-    except httpx.ConnectError:
-        return (
-            f"❌ ВЕРИФИКАЦИЯ ПРОВАЛЕНА: Не удалось подключиться к {url} (ConnectError / Сервер не запущен).\n"
-            f"КРИТИЧЕСКИ ВАЖНО: Деплой ещё не завершился или сервер упал при старте. "
-            f"Проверь статус деплоя и логи через infra_logs!"
-        )
-    except httpx.TimeoutException:
-        return (
-            f"⚠️ ВЕРИФИКАЦИЯ: Таймаут ответа ({timeout_sec} сек) от {url}.\n"
-            f"Сервис либо ещё собирается/стартует (холодный старт Render), либо завис."
-        )
-    except Exception as exc:
-        return f"❌ Ошибка при выполнении проверки доступности {url}: {exc}"
-
-
-
+# ---------------- Спецификации инструментов ----------------
 
 def _tool(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
-    """Собирает описание инструмента в формате OpenAI function calling."""
-    params: dict = {"type": "object", "properties": properties}
-    if required:
-        params["required"] = required
-    return {"type": "function", "function": {
-        "name": name, "description": description, "parameters": params}}
-
-
-_P = {"type": "string", "description": "Путь относительно рабочей папки"}
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required or [],
+            },
+        },
+    }
 
 
 def build_tools() -> list[dict]:
-    """Описания всех инструментов агента в формате function calling."""
+    """Спецификации канонических инструментов Claude Code."""
     return [
-        _tool("write_file", "Создаёт или перезаписывает текстовый файл.",
-              {"path": _P, "content": {"type": "string", "description": "Содержимое файла"}},
-              ["path", "content"]),
-        _tool("edit_file", "Точечно меняет текст в существующем файле. "
-                           "Используй вместо перезаписи всего файла, когда "
-                           "надо поменять одну-две строки.",
-              {"path": _P,
-               "old_text": {"type": "string", "description": "Что заменить (дословно)"},
-               "new_text": {"type": "string", "description": "На что заменить"},
-               "replace_all": {"type": "boolean", "description": "Заменить все вхождения"}},
-              ["path", "old_text", "new_text"]),
-        _tool("view_image", "Показывает информацию об изображении: размеры, "
-                            "а для SVG - ещё и текст на картинке.",
-              {"path": _P}, ["path"]),
-        _tool("grep", "Ищет текст по всем файлам проекта. Быстрее, чем открывать "
-                      "файлы по одному.",
-              {"pattern": {"type": "string", "description": "Регулярное выражение"},
-               "glob": {"type": "string", "description": "Маска файлов, по умолчанию '*'"},
-               "ignore_case": {"type": "boolean", "description": "Игнорировать регистр"},
-               "max_results": {"type": "integer", "description": "Сколько совпадений"}},
-              ["pattern"]),
-        _tool("read_file", "Читает текстовый файл. Для просмотра содержимого.",
-              {"path": _P}, ["path"]),
-        _tool("list_files", "Показывает содержимое директории. По умолчанию '.'.",
-              {"directory": {"type": "string", "description": "Директория, по умолчанию '.'"}}),
-        _tool("tree", "Показывает дерево файлов и папок - удобно, когда их много.",
-              {"path": _P,
-               "max_depth": {"type": "integer", "description": "Максимальная глубина, по умолчанию 3"}},
-              ["path"]),
-        _tool("make_dir", "Создаёт папку, включая промежуточные. Сделай это перед созданием файлов проекта.",
-              {"path": _P}, ["path"]),
-        _tool("delete_dir", "Удаляет папку. Если непустая - требуется recursive=true.",
-              {"path": _P,
-               "recursive": {"type": "boolean", "description": "Удалять вместе с содержимым"}},
-              ["path"]),
-        _tool("move_file", "Перемещает или переименовывает файл.",
-              {"source": {"type": "string", "description": "Откуда"},
-               "destination": {"type": "string", "description": "Куда"}},
-              ["source", "destination"]),
-        _tool("delete_file", "Удаляет файл (не папку).",
-              {"path": _P}, ["path"]),
-        _tool("execute_code", "Выполняет Python-код и возвращает вывод. Для вычислений и проверки гипотез.",
-              {"code": {"type": "string"}}, ["code"]),
-        _tool("run_python_file", "Запускает Python-файл из рабочей папки и возвращает вывод.",
-              {"path": _P}, ["path"]),
-        _tool("web_search", "Ищет информацию в интернете.",
-              {"query": {"type": "string"},
-               "max_results": {"type": "integer", "description": "Сколько результатов (по умолч. 5)"}},
-              ["query"]),
-        _tool("fetch_url", "Загружает страницу по адресу и возвращает её текст.",
-              {"url": {"type": "string"}}, ["url"]),
-        _tool("cloud_upload", "Выгружает файл из рабочей папки в облачное хранилище Storj.",
-              {"filename": {"type": "string", "description": "Имя файла в рабочей папке"}},
-              ["filename"]),
-
-        # ---------- Секреты ----------
-        _tool("secret_set", "Сохраняет API-ключ в зашифрованное хранилище. "
-                            "Ключ НЕ попадает в файлы проекта и не утечёт в git. "
-                            "Имя должно начинаться с RENDER_, GITHUB_, VERCEL_, "
-                            "AWS_, SUPABASE_, OPENROUTER_, GROQ_, GEMINI_ или AG_.",
-              {"name": {"type": "string", "description": "Имя секрета, например RENDER_API_KEY"},
-               "value": {"type": "string", "description": "Само значение ключа"},
-               "note": {"type": "string", "description": "Заметка для себя, что это за ключ"}},
-              ["name", "value"]),
-        _tool("secret_list", "Показывает список сохранённых секретов. Значения не показывает.",
-              {}),
-        _tool("secret_delete", "Удаляет секрет из хранилища.",
-              {"name": {"type": "string"}}, ["name"]),
-
-        # ---------- Инфраструктура ----------
-        _tool("infra_services", "Показывает все сервисы на Render: id, адреса, репозитории.",
-              {}),
-        _tool("infra_env", "Управляет переменными окружения сервиса на Render. "
-                           "action=list показать, set добавить, delete удалить. "
-                           "secret=true - сохранить значение как секрет.",
-              {"service_id": {"type": "string", "description": "id сервиса из infra_services"},
-               "action": {"type": "string", "description": "list, set или delete"},
-               "name": {"type": "string", "description": "Имя переменной"},
-               "value": {"type": "string", "description": "Значение переменной"},
-               "secret": {"type": "boolean", "description": "Скрыть значение в интерфейсе"}},
-              ["service_id"]),
-        _tool("infra_deploy", "Запускает новый деплой сервиса на Render.",
-              {"service_id": {"type": "string"},
-               "clear_cache": {"type": "boolean", "description": "Сбросить кэш сборки"}},
-              ["service_id"]),
-        _tool("infra_deploy_status", "Показывает статус деплоя по его id.",
-              {"deploy_id": {"type": "string"}}, ["deploy_id"]),
-        _tool("infra_logs", "Показывает последние строки логов деплоя.",
-              {"deploy_id": {"type": "string"},
-               "tail": {"type": "integer", "description": "Сколько строк, по умолч. 60"}},
-              ["deploy_id"]),
-        _tool("infra_create", "Создаёт сервис на Render из GitHub-репозитория. "
-                              "Если API вернёт ошибку - создай через render.yaml.",
-              {"name": {"type": "string"},
-               "repo": {"type": "string", "description": "https://github.com/user/repo"},
-               "branch": {"type": "string"},
-               "plan": {"type": "string", "description": "free или starter"},
-               "build_command": {"type": "string"},
-               "start_command": {"type": "string"},
-               "owner_id": {"type": "string", "description": "id рабочего пространства Render"}},
-              ["name", "repo"]),
-
-        # ---------- GitHub и Деплой ----------
-        _tool("github_search", "Ищет открытые репозитории и шаблоны на GitHub. "
-                               "Используй, чтобы найти готовый проект, библиотеку или шаблон.",
-              {"query": {"type": "string", "description": "Поисковый запрос (например: 'telegram bot python', 'landing page')"},
-               "language": {"type": "string", "description": "Язык программирования (например: python, javascript, html)"},
-               "max_results": {"type": "integer", "description": "Количество результатов (1-10, по умолч. 5)"},
-               "sort": {"type": "string", "description": "Сортировка: stars, forks, updated (по умолч. stars)"}},
-              ["query"]),
-        _tool("github_clone", "Скачивает и распаковывает проект с GitHub в рабочую папку. "
-                              "Позволяет мгновенно клонировать готовый шаблон или репозиторий для доработки.",
-              {"repo_url": {"type": "string", "description": "URL репозитория (например 'https://github.com/owner/repo' или 'owner/repo')"},
-               "branch": {"type": "string", "description": "Ветка (необязательно, по умолч. default ветка репозитория)"},
-               "dest_dir": {"type": "string", "description": "Подпапка в текущем проекте для распаковки (по умолч. корень проекта)"}},
-              ["repo_url"]),
-        _tool("github_sync", "Выгружает и синхронизирует проект на GitHub в репозиторий. "
-                             "Автоматически создаёт репозиторий, если его ещё нет, "
-                             "и передаёт все файлы проекта через GitHub API. "
-                             "Используй этот инструмент, когда пользователь просит "
-                             "выгрузить, залить или сохранить проект на GitHub.",
-              {"repo_name": {"type": "string", "description": "Имя репозитория (по умолчанию имя текущего проекта)"},
-               "branch": {"type": "string", "description": "Ветка (по умолчанию main)"},
-               "message": {"type": "string", "description": "Сообщение коммита"},
-               "private": {"type": "boolean", "description": "Сделать репозиторий приватным"},
-               "all_repo": {"type": "boolean", "description": "Выгрузить корневой репозиторий light-agent (по умолч. false)"}}),
-        _tool("infra_deploy_project", "Развёртывает проект на сервере Render. "
-                                      "Если сервис уже существует (например light-agent) — запускает свежий деплой. "
-                                      "Если нет — создаёт веб-сервис на Render из указанного репозитория GitHub. "
-                                      "Используй, когда пользователь просит настроить сервер или задеплоить проект.",
-              {"service_name": {"type": "string", "description": "Имя сервиса на Render (по умолчанию light-agent или имя проекта)"},
-               "repo_url": {"type": "string", "description": "URL репозитория GitHub (необязательно)"},
-               "branch": {"type": "string", "description": "Ветка (по умолчанию main)"},
-               "clear_cache": {"type": "boolean", "description": "Сбросить кэш сборки (по умолчанию true)"}}),
-
-        # ---------- Автопроверка и тестирование ----------
-        _tool("validate_code", "Проверяет файлы проекта на синтаксические ошибки (Python AST, JSON, JS/TS). "
-                               "Если path указан — проверяет конкретный файл. Если path пустой — сканирует все файлы проекта. "
-                               "Всегда вызывай этот инструмент после написания или правки кода для самопроверки.",
-              {"path": {"type": "string", "description": "Путь к файлу для проверки (необязательно, по умолч. все файлы)"}}),
-        _tool("run_test", "Запускает автотесты проекта через pytest или unittest. "
-                          "Возвращает подробный отчет об ошибках. Всегда запускай тесты перед сдачей работы.",
-              {"target": {"type": "string", "description": "Файл или путь с тестами (необязательно)"},
-               "args": {"type": "string", "description": "Дополнительные аргументы pytest"}}),
-
-        # ---------- Субагенты и делегирование ----------
-        _tool("delegate_task", "Делегирует подзадачу автономному специализированному субагенту. "
-                               "Субагент выполняет задачу в изолированном контексте с нужным набором инструментов "
-                               "и возвращает структурированный отчёт. "
-                               "Роли: 'researcher' (поиск в сети, GitHub, документации), "
-                               "'coder' (написание/правка модулей и файлов), "
-                               "'tester' (запуск тестов, проверка кода на ошибки), "
-                               "'custom' (универсальный специалист).",
-              {"role": {"type": "string", "description": "Роль: 'researcher', 'coder', 'tester' или 'custom'"},
-               "task": {"type": "string", "description": "Подробное и чёткое задание для субагента со всеми деталями"},
-               "model": {"type": "string", "description": "Модель (необязательно, например 'antigravity-3.8-flash' или 'antigravity-3.8-pro')"}},
-              ["role", "task"]),
-        _tool("subagent_roles", "Показывает список доступных ролей субагентов, их модели и инструменты.",
-              {}),
-
-        # ---------- Паспорт проекта и долговременная память ----------
-        _tool("project_state_get", "Показывает текущий архитектурный паспорт проекта "
-                                   "(цель, стек, ключевые файлы, принятые решения, статус). "
-                                   "Используй, чтобы освежить память о проекте или показать его пользователю.",
-              {}),
-        _tool("project_state_update", "Обновляет архитектурный паспорт проекта. "
-                                     "ОБЯЗАТЕЛЬНО вызывай при согласовании архитектуры, смене стека, "
-                                     "добавлении ключевых файлов, смене текущего статуса разработки "
-                                     "или фиксации уроков после исправления багов (post_mortems), "
-                                     "чтобы агент никогда не забывал контекст и не повторял старых ошибок.",
-              {"goal": {"type": "string", "description": "Цель или описание проекта"},
-               "tech_stack": {"type": "string", "description": "Стек технологий через запятую, например 'FastAPI, SQLite, Tailwind'"},
-               "decisions": {"type": "string", "description": "Ключевые решения через точку с запятой, например 'JWT в cookie; SQLite для тестов'"},
-               "status": {"type": "string", "description": "Текущий статус и над чем сейчас работаем"},
-               "files_summary": {"type": "string", "description": "Назначение файлов через точку с запятой, например 'auth.py: токены; main.py: API'"},
-               "post_mortems": {"type": "string", "description": "Уроки и предотвращенные ошибки через точку с запятой, например 'Не использовать starlette >=0.42; Запуск только через python main.py'"}}),
-
-        # ---------- HTTP и Верификация ----------
-        _tool("verify_deployment_health", "Выполняет обязательный HTTP Smoke-тест задеплоенного сервиса. "
-                                          "ОБЯЗАТЕЛЬНО вызывай этот инструмент перед тем, как сообщить пользователю "
-                                          "о завершении деплоя. Если сервис возвращает ошибку — запрещено говорить об успехе!",
-              {"url": {"type": "string", "description": "URL сервиса (например https://my-app.onrender.com/health)"},
-               "expected_status": {"type": "integer", "description": "Ожидаемый код ответа (по умолч. 200)"},
-               "timeout_sec": {"type": "integer", "description": "Таймаут проверки в секундах (по умолч. 25)"}},
-              ["url"]),
-        _tool("http_request", "Делает HTTP-запрос к API облачного провайдера "
-                              "(Render, Vercel, GitHub, AWS). "
-                              "В заголовках пиши @NAME - значение секрета "
-                              "подставится само, ключ не попадёт в файлы.",
-              {"method": {"type": "string", "description": "GET, POST, PUT, PATCH, DELETE"},
-               "url": {"type": "string", "description": "Полный https-адрес"},
-               "headers": {"type": "string", "description": "JSON-объект заголовков"},
-               "body": {"type": "string", "description": "Тело запроса, JSON"},
-               "auth_secret": {"type": "string", "description": "Имя секрета для Authorization, например @GITHUB_TOKEN"},
-               "timeout": {"type": "integer", "description": "Таймаут, сек (макс 180)"}},
-              ["method", "url"]),
+        _tool(
+            "bash",
+            "Выполняет команду в Bash терминале (git, pip, python, curl, запуск тестов, проверка статуса).",
+            {"command": {"type": "string", "description": "Команда bash для запуска"},
+             "timeout": {"type": "integer", "description": "Таймаут в секундах (по умолч. 60)"}},
+            ["command"],
+        ),
+        _tool(
+            "view",
+            "Читает файл с номерами строк и поддержкой срезов [start_line, end_line]. Также показывает списки директорий.",
+            {"path": {"type": "string", "description": "Путь к файлу или папке"},
+             "view_range": {"type": "array", "items": {"type": "integer"}, "description": "[начало, конец] строк"}},
+            ["path"],
+        ),
+        _tool(
+            "edit",
+            "Хирургически заменяет фрагмент old_str на new_str в существующем файле. Предпочитай edit полной перезаписи.",
+            {"path": {"type": "string", "description": "Путь к файлу"},
+             "old_str": {"type": "string", "description": "Точный исходный текст для замены"},
+             "new_str": {"type": "string", "description": "Новый текст"}},
+            ["path", "old_str", "new_str"],
+        ),
+        _tool(
+            "write",
+            "Создаёт новый файл или полностью перезаписывает существующий.",
+            {"path": {"type": "string", "description": "Путь к файлу"},
+             "content": {"type": "string", "description": "Содержимое файла"}},
+            ["path", "content"],
+        ),
+        _tool(
+            "glob",
+            "Находит файлы по шаблону (например '*.py', 'src/**/*.tsx').",
+            {"pattern": {"type": "string", "description": "Маска поиска"},
+             "path": {"type": "string", "description": "Папка поиска (по умолч. .)"}},
+            ["pattern"],
+        ),
+        _tool(
+            "grep",
+            "Быстрый поиск регулярного выражения по содержимому всех файлов проекта.",
+            {"pattern": {"type": "string", "description": "Регулярное выражение для поиска"},
+             "path": {"type": "string", "description": "Папка поиска"},
+             "include": {"type": "string", "description": "Фильтр имен файлов (например '*.py')"}},
+            ["pattern"],
+        ),
+        _tool(
+            "agent",
+            "Запускает автономного специализированного субагента в изолированном контексте. "
+            "Роли: 'researcher' (исследование/поиск), 'coder' (написание модулей), "
+            "'tester' (запуск тестов/верификация), 'devops' (настройка серверов/git/окружения), 'general' (универсальный).",
+            {"role": {"type": "string", "description": "Роль субагента"},
+             "task": {"type": "string", "description": "Чёткое и детальное задание для субагента"},
+             "model": {"type": "string", "description": "Модель (необязательно)"}},
+            ["role", "task"],
+        ),
+        _tool(
+            "todo",
+            "Управляет чеклистом задач текущей сессии (action: 'get', 'set', 'add', 'clear').",
+            {"action": {"type": "string", "description": "get, set, add или clear"},
+             "tasks": {"type": "array", "items": {"type": "string"}, "description": "Список задач"}},
+        ),
+        _tool(
+            "web_search",
+            "Поиск информации в интернете.",
+            {"query": {"type": "string", "description": "Поисковый запрос"}},
+            ["query"],
+        ),
+        _tool(
+            "fetch_url",
+            "Загружает веб-страницу и возвращает текстовое содержимое.",
+            {"url": {"type": "string", "description": "Полный URL адрес"}},
+            ["url"],
+        ),
     ]
 
 
-_REGISTRY: dict[str, object] = {
-    "write_file": tool_write_file,
-    "edit_file": tool_edit_file,
-    "view_image": tool_view_image,
+_REGISTRY = {
+    "bash": tool_bash,
+    "view": tool_view,
+    "edit": tool_edit,
+    "write": tool_write,
+    "glob": tool_glob,
     "grep": tool_grep,
-    "read_file": tool_read_file,
-    # Инфраструктура и секреты живут в отдельном модуле: там бóльше
-    # кода и своя логика (шифрование, HTTP, работа с Render API).
-    "secret_set": _infra.tool_secret_set,
-    "secret_list": _infra.tool_secret_list,
-    "secret_delete": _infra.tool_secret_delete,
-    "infra_services": _infra.tool_infra_services,
-    "infra_env": _infra.tool_infra_env,
-    "infra_deploy": _infra.tool_infra_deploy,
-    "infra_deploy_status": _infra.tool_infra_deploy_status,
-    "infra_logs": _infra.tool_infra_logs,
-    "infra_create": _infra.tool_infra_create,
-    "github_search": _infra.tool_github_search,
-    "github_clone": _infra.tool_github_clone,
-    "github_sync": _infra.tool_github_sync,
-    "infra_deploy_project": _infra.tool_infra_deploy_project,
-    "verify_deployment_health": tool_verify_deployment_health,
-    "delegate_task": _subagent.tool_delegate_task,
-    "subagent_roles": _subagent.tool_subagent_roles,
-    "project_state_get": _project_state.tool_project_state_get,
-    "project_state_update": _project_state.tool_project_state_update,
-    "http_request": _infra.tool_http_request,
-    "list_files": tool_list_files,
-    "tree": tool_tree,
-    "make_dir": tool_make_dir,
-    "delete_dir": tool_delete_dir,
-    "move_file": tool_move_file,
-    "delete_file": tool_delete_file,
-    "execute_code": tool_execute_code,
-    "run_python_file": tool_run_python_file,
-    "validate_code": tool_validate_code,
-    "run_test": tool_run_test,
+    "agent": tool_agent,
+    "todo": tool_todo,
     "web_search": tool_web_search,
-    "search_web": tool_web_search,
-    "search": tool_web_search,
     "fetch_url": tool_fetch_url,
-    "cloud_upload": tool_cloud_upload,
+    "move_file": tool_move_file,
 }
 
 
 def execute(name: str, args: dict) -> str:
-    """Вызывает инструмент по имени."""
+    """Выполняет инструмент по имени."""
     fn = _REGISTRY.get(name)
-    if fn is None:
+    if not fn:
         return f"Неизвестный инструмент: {name}"
     try:
         return str(fn(**args))
     except TypeError as exc:
-        return f"Неверные аргументы для {name}: {exc}"
+        return f"Ошибка аргументов для {name}: {exc}"
     except Exception as exc:
-        return f"Ошибка инструмента {name}: {exc}"
+        return f"Ошибка выполнения инструмента {name}: {exc}"
+
+
+# ---------------- Системный промпт Claude Code ----------------
+
+def get_claude_system_prompt(project: str = "") -> str:
+    """Формирует оригинальный системный промпт Claude Code с подгрузкой CLAUDE.md."""
+    base_prompt = """You are Claude Code, Anthropic's official agentic coding assistant for software engineering.
+You operate directly in an autonomous developer environment with terminal, code navigation, and editing tools.
+
+CORE WORKFLOW & PRINCIPLES:
+1. SOFTWARE ENGINEERING FOCUS:
+   - When given instructions, interpret them in the context of professional software engineering and the current working directory.
+   - Investigate before modifying: use `view`, `glob`, `grep` to locate and read relevant files before writing or editing.
+   - Make surgical edits: prefer `edit` over `write` to update existing files without blowing away comments or formatting.
+   - Test and verify: use `bash` to run unit tests, type checkers, linters, or check server health after making changes.
+
+2. SUBAGENTS (DELEGATION VIA `agent` TOOL):
+   - You can launch specialized subagents with isolated context to avoid cluttering your own conversation:
+     • 'researcher': read-only codebase exploration, doc search, web investigations.
+     • 'coder': implementation or refactoring of isolated modules.
+     • 'tester': executing test suites and diagnosing edge cases.
+     • 'devops': environment management, deployment, server API calls, and git tasks.
+     • 'general': multi-step autonomous tasks.
+   - When delegating, brief the subagent like a smart colleague: explain the goal, context, relevant paths, and expected output.
+
+3. RESTRAINT, REVERSIBILITY & STRICT DISCIPLINE:
+   - Perform ONLY the tasks requested by the user. Match the scope of your actions to what was actually requested.
+   - NEVER make unsolicited git commits, git pushes, or external deployments unless the user explicitly requested them.
+   - NEVER promise on words what you haven't executed: do not report that something is built, tested, or deployed without running the corresponding tools.
+   - Take local, reversible actions freely; ask or confirm before taking destructive or hard-to-reverse actions.
+
+4. COMMUNICATION STYLE:
+   - Concise, direct, technical, and actionable.
+   - State what you are doing before major steps.
+   - Provide clean end-of-turn summaries: what was changed, test status, and what is ready.
+   - Respond in the language used by the user (default to Russian if the user speaks Russian).
+"""
+
+    # Подгружаем CLAUDE.md проекта, если он существует
+    ws = config.project_dir(project) if project else _ws()
+    claude_md = ws / "CLAUDE.md"
+    project_rules = ""
+    if claude_md.is_file():
+        try:
+            content = claude_md.read_text(encoding="utf-8", errors="replace").strip()
+            if content:
+                project_rules = f"\n\nPROJECT INSTRUCTIONS (CLAUDE.md):\n{content}\n"
+        except Exception:
+            pass
+
+    return base_prompt + project_rules
+
+
+SYSTEM_PROMPT = get_claude_system_prompt()
