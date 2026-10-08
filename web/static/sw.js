@@ -12,12 +12,12 @@
  * ВАЖНО: SW кэширует только статику. Данные агента (переписка, файлы)
  * живут на сервере и в Supabase — здесь их нет.
  */
-const VERSION = 'claude-code-v8';
+const VERSION = 'claude-code-v12';
 // Ресурсы, которые кладём в кэш при установке.
 const ASSETS = [
   '/',
-  '/static/app.css',
-  '/static/app.js',
+  '/static/app.css?v=7.0',
+  '/static/app.js?v=7.0',
   '/static/manifest.json',
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',
