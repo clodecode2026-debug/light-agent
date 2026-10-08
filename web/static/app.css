@@ -165,7 +165,7 @@ header{
 .proj-dropdown{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
   padding:6px 9px;font-size:12.5px;color:var(--txt);font-weight:500;cursor:pointer;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
-.sess-scroll{flex:0 0 auto;max-height:180px;overflow-y:auto;padding:4px 6px}
+.sess-scroll{flex:0 0 auto;max-height:260px;overflow-y:auto;padding:4px 6px}
 .tree-scroll{flex:1 1 auto;overflow-y:auto;min-height:110px;padding:4px 6px}
 
 /* Дерево файлов */
@@ -289,7 +289,29 @@ header{
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Колёсико: гарантированно и непрерывно крутится 360° на 60fps */
+/* Колёсико: гарантированно и непрерывно крутится 360° через SVG и CSS */
+.thinking .spin-wrap {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0 !important;
+  vertical-align: middle !important;
+}
+
+.thinking .spin-svg,
+.spin-svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0 !important;
+  display: inline-block !important;
+  vertical-align: middle !important;
+  transform-origin: 50% 50% !important;
+  animation: spinWheel 0.8s linear infinite !important;
+  -webkit-animation: spinWheel 0.8s linear infinite !important;
+}
+
 .thinking .spin,
 .spin {
   display: inline-block !important;
@@ -299,38 +321,28 @@ header{
   min-height: 13px !important;
   box-sizing: border-box !important;
   border-radius: 50% !important;
-  border: 2px solid rgba(255, 255, 255, 0.18) !important;
-  border-top-color: var(--acc) !important;
-  border-right-color: var(--acc-hi) !important;
-  animation: spinWheel 0.75s linear infinite !important;
-  -webkit-animation: spinWheel 0.75s linear infinite !important;
+  border: 2px solid rgba(255, 255, 255, 0.2) !important;
+  border-top-color: var(--acc, #d97757) !important;
+  border-right-color: var(--acc-hi, #f09575) !important;
+  animation: spinWheel 0.8s linear infinite !important;
+  -webkit-animation: spinWheel 0.8s linear infinite !important;
   flex-shrink: 0 !important;
   vertical-align: middle !important;
   margin-right: 2px !important;
 }
 
 @keyframes spinWheel {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% { transform: rotate(0deg); -webkit-transform: rotate(0deg); }
+  100% { transform: rotate(360deg); -webkit-transform: rotate(360deg); }
 }
 @-webkit-keyframes spinWheel {
-  0% { -webkit-transform: rotate(0deg); }
-  100% { -webkit-transform: rotate(360deg); }
+  0% { -webkit-transform: rotate(0deg); transform: rotate(0deg); }
+  100% { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
 }
 
-/* Обёртка spin-wrap для совместимости */
-.thinking .spin-wrap {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  width: 14px !important;
-  height: 14px !important;
-  flex-shrink: 0 !important;
-}
-
-/* Текст «Думаю» или текущего действия инструмента */
+/* Текст «Думаю» — сине-голубой цвет как на скриншоте Claude Code */
 .thinking .think-text {
-  color: var(--txt) !important;
+  color: #60a5fa !important;
   font-weight: 500 !important;
   letter-spacing: 0.1px !important;
   display: inline-block !important;
@@ -340,7 +352,7 @@ header{
 .thinking .dots {
   display: inline-flex !important;
   align-items: baseline !important;
-  gap: 2.5px !important;
+  gap: 2px !important;
   margin-left: 1px !important;
   vertical-align: baseline !important;
 }
@@ -351,7 +363,7 @@ header{
   font-size: 15px !important;
   font-weight: 700 !important;
   line-height: 1 !important;
-  color: var(--acc) !important;
+  color: #60a5fa !important;
   animation: dotWave 1.2s ease-in-out infinite both !important;
   -webkit-animation: dotWave 1.2s ease-in-out infinite both !important;
   transform-origin: center bottom !important;
@@ -368,6 +380,22 @@ header{
 .thinking .dots .dot:nth-child(3) {
   animation-delay: 0.4s !important;
   -webkit-animation-delay: 0.4s !important;
+}
+
+/* Оранжевый мигающий блок-курсор как на скриншоте */
+.thinking .caret-block {
+  display: inline-block !important;
+  width: 7px !important;
+  height: 14px !important;
+  background: var(--acc, #d97757) !important;
+  vertical-align: middle !important;
+  margin-left: 3px !important;
+  border-radius: 1px !important;
+  animation: blinkBlock 0.9s step-end infinite !important;
+}
+@keyframes blinkBlock {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 
 @keyframes dotWave {
