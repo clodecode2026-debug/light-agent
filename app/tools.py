@@ -143,8 +143,69 @@ def tool_bash(command: str, timeout: int = 60) -> str:
         return f"Ошибка запуска bash: {exc}"
 
 
+def _ocr_and_describe_image(full_path: Path, rel_path: str, custom_prompt: str = "") -> str:
+    """Извлекает текст (OCR) и визуальное описание скана/изображения через Vision API."""
+    try:
+        import base64
+        import httpx
+
+        raw_bytes = full_path.read_bytes()
+        size = len(raw_bytes)
+        if size > 6_000_000:
+            return f"Изображение {rel_path} ({size} байт) слишком большое для прямого OCR (макс. 6 МБ)."
+
+        b64 = base64.b64encode(raw_bytes).decode("utf-8")
+        mime = image_mime(str(full_path))
+        
+        headers = {
+            "Authorization": f"Bearer {config.AG_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        url = f"{config.AG_BASE_URL.rstrip('/')}/chat/completions"
+        prompt = custom_prompt.strip() if custom_prompt else (
+            "Ты — высококвалифицированный аналитик документов, медицинских сканов и изображений. "
+            "Внимательно изучи прикреплённое изображение. "
+            "1. Сделай полный и точный OCR: выпиши ВЕСЬ текст на картинке дословно, ничего не пропуская: "
+            "медицинские заключения (Befund, Beurteilung, Diagnose, МРТ, КТ, УЗИ), диагнозы, параметры, сегменты (L4, L5, S1 и др.), числа, заключения врачей, печати. "
+            "2. Если это медицинский скан (МРТ, рентген, КТ) или диаграмма — опиши видимые патологии и анатомические структуры. "
+            "3. Сделай структурированный вывод и резюме на русском языке."
+        )
+
+        # Модели с активной поддержкой Vision на шлюзе
+        for vision_model in ["gpt-4o", "gemini-3.8-flash", "claude-3-5-sonnet-20241022"]:
+            try:
+                r = httpx.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "model": vision_model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt},
+                                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                                ]
+                            }
+                        ],
+                        "max_tokens": 2000,
+                        "temperature": 0.2
+                    },
+                    timeout=40.0
+                )
+                if r.status_code == 200:
+                    ans = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if ans:
+                        return f"=== РАСПОЗНАННЫЙ ТЕКСТ И АНАЛИЗ СКАНА/ИЗОБРАЖЕНИЯ {rel_path} ({size} байт, модель: {vision_model}) ===\n{ans}"
+            except Exception:
+                continue
+        return f"Изображение {rel_path} ({size} байт, mime: {mime}). OCR-модуль не вернул распознанный текст."
+    except Exception as exc:
+        return f"Ошибка OCR-анализа изображения {rel_path}: {exc}"
+
+
 def tool_view(path: str, view_range: list[int] | None = None) -> str:
-    """Читает файл с номерами строк (1-based) и поддержкой диапазонов [start, end]."""
+    """Читает файл (текст, код, изображения/сканы с OCR, docx, pdf) с номерами строк."""
     try:
         full = _safe_path(path)
         if not full.exists():
@@ -156,12 +217,38 @@ def tool_view(path: str, view_range: list[int] | None = None) -> str:
                 lines.append(f"  {'[DIR] ' if e.is_dir() else '      '}{e.name}")
             return "\n".join(lines)
 
+        # Распознавание изображений и сканов через Vision/OCR
         if is_image(str(full)):
             size = full.stat().st_size
             if full.suffix.lower() == ".svg":
                 text = full.read_text(encoding="utf-8", errors="replace")
-                return f"SVG-изображение {path} ({size} байт):\n{text[:2000]}"
-            return f"Изображение {path} ({size} байт, mime: {image_mime(str(full))})."
+                return f"SVG-изображение {path} ({size} байт):\n{text[:3000]}"
+            return _ocr_and_describe_image(full, path)
+
+        # Чтение документов DOCX
+        if full.suffix.lower() == ".docx":
+            import zipfile
+            import xml.etree.ElementTree as ET
+            try:
+                with zipfile.ZipFile(str(full)) as z:
+                    xml_content = z.read("word/document.xml")
+                    tree = ET.fromstring(xml_content)
+                    texts = [node.text for node in tree.iter() if node.text]
+                    doc_text = "\n".join(" ".join(texts).split("  "))
+                    return f"=== Документ DOCX {path} ===\n{doc_text[:20000]}"
+            except Exception as exc:
+                return f"Ошибка чтения docx {path}: {exc}"
+
+        # Чтение документов PDF
+        if full.suffix.lower() == ".pdf":
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(str(full))
+                pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+                if pdf_text.strip():
+                    return f"=== Текст PDF документа {path} ({len(reader.pages)} стр.) ===\n{pdf_text[:20000]}"
+            except Exception:
+                pass
 
         raw = full.read_text(encoding="utf-8", errors="replace")
         all_lines = raw.splitlines()
@@ -384,6 +471,54 @@ def _tool(name: str, description: str, properties: dict, required: list[str] | N
     }
 
 
+def tool_image_generate(prompt: str, filename: str = "") -> str:
+    """Генерирует фотореалистичное изображение по текстовому описанию и сохраняет в проект."""
+    import urllib.parse
+    import httpx
+    import time
+
+    clean_prompt = (prompt or "").strip()
+    if not clean_prompt:
+        return "Ошибка: пустой запрос для генерации изображения."
+
+    safe_name = filename.strip() if filename else f"gen_{int(time.time())}.png"
+    if not safe_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        safe_name += ".png"
+
+    out_file = _safe_path(safe_name)
+    encoded = urllib.parse.quote(clean_prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+
+    try:
+        r = httpx.get(url, timeout=45.0, follow_redirects=True)
+        if r.status_code == 200 and len(r.content) > 1000:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_bytes(r.content)
+            try:
+                from . import storage
+                if storage.status().get("enabled"):
+                    storage.upload_file(safe_name, r.content)
+            except Exception:
+                pass
+            return f"Изображение успешно создано и сохранено: {safe_name} ({len(r.content)} байт).\nОно доступно для просмотра и скачивания в проекте."
+        return f"Не удалось сгенерировать изображение (сервис вернул статус {r.status_code})."
+    except Exception as exc:
+        return f"Ошибка при генерации изображения: {exc}"
+
+
+def tool_inspect_image(path: str, prompt: str = "") -> str:
+    """Анализирует любое изображение, скан МРТ/КТ, документ или график с помощью Vision/OCR."""
+    try:
+        full = _safe_path(path)
+        if not full.exists():
+            return f"Файл не найден: {path}"
+        if not is_image(str(full)):
+            return f"Файл {path} не является поддерживаемым изображением."
+        return _ocr_and_describe_image(full, path, prompt)
+    except Exception as exc:
+        return f"Ошибка анализа изображения {path}: {exc}"
+
+
 def build_tools() -> list[dict]:
     """Спецификации канонических инструментов Claude Code."""
     return [
@@ -396,7 +531,7 @@ def build_tools() -> list[dict]:
         ),
         _tool(
             "view",
-            "Читает файл с номерами строк и поддержкой срезов [start_line, end_line]. Также показывает списки директорий.",
+            "Читает файл с номерами строк и поддержкой срезов [start_line, end_line]. Также показывает списки директорий, читает DOCX, PDF и сканы/картинки (OCR).",
             {"path": {"type": "string", "description": "Путь к файлу или папке"},
              "view_range": {"type": "array", "items": {"type": "integer"}, "description": "[начало, конец] строк"}},
             ["path"],
@@ -437,8 +572,8 @@ def build_tools() -> list[dict]:
             "Роли: 'researcher' (исследование/поиск), 'coder' (написание модулей), "
             "'tester' (запуск тестов/верификация), 'devops' (настройка серверов/git/окружения), 'general' (универсальный).",
             {"role": {"type": "string", "description": "Роль субагента"},
-             "task": {"type": "string", "description": "Чёткое и детальное задание для субагента"},
-             "model": {"type": "string", "description": "Модель (необязательно)"}},
+              "task": {"type": "string", "description": "Чёткое и детальное задание для субагента"},
+              "model": {"type": "string", "description": "Модель (необязательно)"}},
             ["role", "task"],
         ),
         _tool(
@@ -446,6 +581,20 @@ def build_tools() -> list[dict]:
             "Управляет чеклистом задач текущей сессии (action: 'get', 'set', 'add', 'clear').",
             {"action": {"type": "string", "description": "get, set, add или clear"},
              "tasks": {"type": "array", "items": {"type": "string"}, "description": "Список задач"}},
+        ),
+        _tool(
+            "image_generate",
+            "Генерирует фотореалистичное изображение, иллюстрацию или визуализацию по описанию и сохраняет файл в проект.",
+            {"prompt": {"type": "string", "description": "Подробное текстовое описание картинки на английском или русском языке"},
+             "filename": {"type": "string", "description": "Имя файла для сохранения (например 'image.png')"}},
+            ["prompt"],
+        ),
+        _tool(
+            "inspect_image",
+            "Мультимодальный анализ изображений, сканов МРТ, справок и документов (OCR) с извлечением текста и диагнозов.",
+            {"path": {"type": "string", "description": "Путь к изображению или скану в проекте"},
+             "prompt": {"type": "string", "description": "Что именно найти или проанализировать на картинке (необязательно)"}},
+            ["path"],
         ),
         _tool(
             "web_search",
@@ -471,6 +620,8 @@ _REGISTRY = {
     "grep": tool_grep,
     "agent": tool_agent,
     "todo": tool_todo,
+    "image_generate": tool_image_generate,
+    "inspect_image": tool_inspect_image,
     "web_search": tool_web_search,
     "fetch_url": tool_fetch_url,
     "move_file": tool_move_file,
