@@ -1,0 +1,13 @@
+{
+  "goal": "Разработка проекта",
+  "tech_stack": [
+    "Python",
+    "FastAPI"
+  ],
+  "architecture": {},
+  "key_decisions": [],
+  "current_status": "Готов к работе по указаниям пользователя",
+  "updated_at": "2026-10-08T01:10:00.000000+00:00",
+  "project_name": "default",
+  "post_mortems": []
+}
