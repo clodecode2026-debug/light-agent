@@ -68,8 +68,7 @@ def _build_messages(session_id: str, user_message: str,
         messages.append({"role": "user", "content": user_message})
     else:
         built = memory.build_context(session_id, user_message, project=project)
-        fresh = built[1:-1] if (built and built[0]["role"] == "system") else built[:-1]
-        for m in fresh:
+        for m in built[:-1]:
             messages.append({"role": m["role"], "content": m["content"]})
         messages.append({"role": "user", "content": user_message})
 
