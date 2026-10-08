@@ -1,0 +1,10 @@
+[
+  "ai_wife_coach_repo/test_coach.py::test_books_and_german_course_endpoints",
+  "ai_wife_coach_repo/test_coach.py::test_german_endpoint",
+  "ai_wife_coach_repo/test_coach.py::test_health",
+  "ai_wife_coach_repo/test_coach.py::test_library_endpoint",
+  "test_coach.py::test_books_and_german_course_endpoints",
+  "test_coach.py::test_german_endpoint",
+  "test_coach.py::test_health",
+  "test_coach.py::test_library_endpoint"
+]
