@@ -237,8 +237,20 @@ def list_projects() -> list[dict]:
     client = _get_client()
     seen_slugs = set()
     out = []
+    msg_counts: dict[str, int] = {}
 
     if client is not None:
+        # 1. Считаем количество сообщений по проектам в agent_messages (исключая сторонние проекты)
+        try:
+            mr = client.table("agent_messages").select("project").execute()
+            for row in (mr.data or []):
+                p = row.get("project")
+                if p and p != "ai-wife-coach":
+                    msg_counts[p] = msg_counts.get(p, 0) + 1
+        except Exception:
+            pass
+
+        # 2. Загружаем проекты из таблицы agent_projects
         try:
             r = (client.table(PROJECTS)
                  .select("name, slug, description, updated_at, created_at")
@@ -255,9 +267,34 @@ def list_projects() -> list[dict]:
                         "updated_at": str(row.get("updated_at", "")),
                         "created_at": str(row.get("created_at", "")),
                         "files": _count_files(s),
+                        "messages": msg_counts.get(s, 0),
                     })
         except Exception:
             pass
+
+        # 3. Автоматически регистрируем любые проекты из agent_messages, которых нет в agent_projects
+        for proj_slug, count in msg_counts.items():
+            if proj_slug not in seen_slugs and proj_slug != "ai-wife-coach":
+                seen_slugs.add(proj_slug)
+                desc = "Проект с историей переписки"
+                now_iso = datetime.now(timezone.utc).isoformat()
+                try:
+                    client.table(PROJECTS).insert({
+                        "name": proj_slug,
+                        "slug": proj_slug,
+                        "description": desc,
+                    }).execute()
+                except Exception:
+                    pass
+                out.append({
+                    "name": proj_slug,
+                    "slug": proj_slug,
+                    "description": desc,
+                    "updated_at": now_iso,
+                    "created_at": now_iso,
+                    "files": _count_files(proj_slug),
+                    "messages": count,
+                })
 
     # Всегда гарантируем наличие default проекта
     if "default" not in seen_slugs:
@@ -269,6 +306,7 @@ def list_projects() -> list[dict]:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "files": _count_files("default"),
+            "messages": msg_counts.get("default", 0),
         })
         seen_slugs.add("default")
 
@@ -277,7 +315,7 @@ def list_projects() -> list[dict]:
         for entry in config.WORKSPACE.iterdir():
             if entry.is_dir() and not entry.name.startswith("."):
                 s = entry.name
-                if s not in seen_slugs:
+                if s not in seen_slugs and s != "ai-wife-coach":
                     seen_slugs.add(s)
                     out.append({
                         "name": s,
@@ -286,11 +324,18 @@ def list_projects() -> list[dict]:
                         "updated_at": datetime.fromtimestamp(entry.stat().st_mtime, timezone.utc).isoformat(),
                         "created_at": datetime.fromtimestamp(entry.stat().st_ctime, timezone.utc).isoformat(),
                         "files": _count_files(s),
+                        "messages": msg_counts.get(s, 0),
                     })
     except Exception:
         pass
 
-    return out
+    # default проект ВСЕГДА идёт первым в списке, остальные - по дате/активности
+    out.sort(key=lambda x: (0 if x.get("slug") == "default" else 1, x.get("updated_at", "")), reverse=False)
+    # Для проектов кроме default сортируем по убыванию даты обновления
+    non_default = [p for p in out if p.get("slug") != "default"]
+    non_default.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    def_proj = [p for p in out if p.get("slug") == "default"]
+    return (def_proj + non_default)
 
 
 def get_project(name: str) -> dict | None:
