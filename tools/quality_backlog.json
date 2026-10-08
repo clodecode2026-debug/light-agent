@@ -1,0 +1,201 @@
+{
+  "project": "AI Wife Coach Super-App for Alina",
+  "created_at": "2026-10-08T00:34:00Z",
+  "target_runtime_minutes": 90,
+  "categories": {
+    "cat_1_psychologist_coach": {
+      "name": "1. Психолог-Коуч (Живой эмпатичный эксперт без банальностей)",
+      "items": [
+        {
+          "id": "c1_no_cliches",
+          "title": "Запрет на банальности и клише",
+          "description": "Полный запрет на 'Я понимаю ваши чувства', 'Не переживайте, все наладится', 'Держитесь'. Живой естественный диалог.",
+          "status": "passed"
+        },
+        {
+          "id": "c1_cbt_ta_methodology",
+          "title": "Глубокая методология КПТ и Транзактный анализ",
+          "description": "Мягкое вскрытие когнитивных искажений через сократический диалог, поддержка Внутреннего Ребёнка и Заботливого Взрослого.",
+          "status": "passed"
+        },
+        {
+          "id": "c1_roman_love_support",
+          "title": "Голос любящего мужа Романа",
+          "description": "Напоминание о надежном тыле и любви Романа: 'Роман безумно гордится твоими успехами и всегда рядом'.",
+          "status": "passed"
+        },
+        {
+          "id": "c1_open_ending_question",
+          "title": "Вопрос в конце каждого ответа",
+          "description": "Коуч никогда не обрывает диалог мертвой точкой, в конце всегда открытый бережный вопрос.",
+          "status": "passed"
+        }
+      ]
+    },
+    "cat_2_longterm_memory": {
+      "name": "2. Долгосрочная память Алины без слива токенов",
+      "items": [
+        {
+          "id": "c2_dossier_fact_extraction",
+          "title": "Файл памяти и профиль Алины (alina_memory_profile.json)",
+          "description": "Хранение фактов: возраст 35, день рождения 25 сентября, украинка, переезд, привычки, страхи, победы в немецком.",
+          "status": "passed"
+        },
+        {
+          "id": "c2_token_efficient_context",
+          "title": "Сжатый профиль в системный промпт (до 250 токенов)",
+          "description": "Передача структурированной выжимки вместо 100 страниц истории, нулевой перерасход токенов.",
+          "status": "passed"
+        }
+      ]
+    },
+    "cat_3_audio_live_separation": {
+      "name": "3. Live Voice и изоляция языков",
+      "items": [
+        {
+          "id": "c3_voice_engine_isolation",
+          "title": "Жесткая изоляция языковых плагинов/голосов",
+          "description": "Психолог говорит только ru-RU-SvetlanaNeural. Немецкий тренер говорит de-DE-SeraphinaMultilingualNeural. Никакой каши.",
+          "status": "passed"
+        },
+        {
+          "id": "c3_markdown_sanitizer",
+          "title": "Нулевая терпимость к звёздочкам и Markdown в TTS",
+          "description": "Полная очистка **звездочек**, #, эмодзи, служебных знаков перед передачей в edge-tts.",
+          "status": "passed"
+        },
+        {
+          "id": "c3_no_ding_turn_taking",
+          "title": "Устранение звука 'Тилилинь' и turn-taking",
+          "description": "Микрофон не перезапускается циклически при тишине. Четкая смена очереди: Алина говорит -> ИИ отвечает.",
+          "status": "passed"
+        },
+        {
+          "id": "c3_slow_voice_replay",
+          "title": "Кнопка 'Повторить медленнее' (🐢 0.75x)",
+          "description": "Возможность прослушать любую фразу на пониженной скорости с акцентированной артикуляцией.",
+          "status": "passed"
+        }
+      ]
+    },
+    "cat_4_duolingo_german_course": {
+      "name": "4. Полный курс немецкого (180 дней, 30 мин/урок)",
+      "items": [
+        {
+          "id": "c4_no_spoiler_distractors",
+          "title": "Никаких очевидных ответов и динамиков у вариантов",
+          "description": "Все варианты одинаковой длины, без спойлеров, у дистракторов нет подсказывающих иконок.",
+          "status": "passed"
+        },
+        {
+          "id": "c4_listening_exercises",
+          "title": "Упражнения на восприятие на слух (Listening Comprehension)",
+          "description": "Немецкая речь звучит со скрытым текстом, задача Алины - понять смысл и выбрать верный перевод.",
+          "status": "passed"
+        },
+        {
+          "id": "c4_color_coded_articles",
+          "title": "Цветовое кодирование артиклей der/die/das",
+          "description": "Синий der, красный die, зеленый das, янтарный plural die во всех карточках и уроках.",
+          "status": "passed"
+        },
+        {
+          "id": "c4_interactive_flashcards",
+          "title": "Интерактивные карточки-флипы с 3D-переворотом",
+          "description": "Возможность полистать карточки слов перед началом урока с озвучкой по клику.",
+          "status": "passed"
+        },
+        {
+          "id": "c4_mistakes_review",
+          "title": "Работа над ошибками (Mistakes Review Inbox)",
+          "description": "Слова с ошибками сохраняются и предлагаются для повторения в конце урока.",
+          "status": "passed"
+        },
+        {
+          "id": "c4_unit_guidebooks",
+          "title": "Справочники грамматики к каждому разделу (Unit Guidebooks)",
+          "description": "36 справочников теории без заумных терминов, с понятными таблицами порядка слов и падежей.",
+          "status": "passed"
+        }
+      ]
+    },
+    "cat_5_iphone_mobile_pwa": {
+      "name": "5. Мобильный интерфейс iPhone (iOS PWA) и верстка",
+      "items": [
+        {
+          "id": "c5_safe_area_insets",
+          "title": "Защита Safe Area Insets на iOS",
+          "description": "Кнопки и навигация не перекрываются нижней полоской жестов Home Bar и челкой Dynamic Island.",
+          "status": "passed"
+        },
+        {
+          "id": "c5_touch_target_zoom",
+          "title": "Увеличенные touch-зоны и блокировка паразитного зума",
+          "description": "Минимум 44x44px по стандартам Apple HIG, touch-action: manipulation от двойного клика.",
+          "status": "passed"
+        },
+        {
+          "id": "c5_pwa_standalone_install",
+          "title": "PWA 1-клик установка на экран 'Домой'",
+          "description": "Manifest, apple-touch-icon, Service Worker и подсказка 'Поделиться -> На экран Домой'.",
+          "status": "passed"
+        },
+        {
+          "id": "c5_haptic_audio_feedback",
+          "title": "Тактильный отклик и аутентичные звуки",
+          "description": "Вибрация и приятные звуки при правильном ответе, ошибке и завершении урока.",
+          "status": "passed"
+        }
+      ]
+    },
+    "cat_6_psychological_adaptability": {
+      "name": "6. Психологическая адаптивность и забота",
+      "items": [
+        {
+          "id": "c6_burnout_fatigue_detection",
+          "title": "Детектор усталости и выгорания",
+          "description": "Если подряд 3 ошибки или слова об усталости - предложение сделать паузу, чай и отдохнуть.",
+          "status": "passed"
+        },
+        {
+          "id": "c6_daytime_adaptation",
+          "title": "Адаптация под время суток",
+          "description": "Утром бодрость и настрой, вечером мягкое снятие напряжения и похвала за день.",
+          "status": "passed"
+        },
+        {
+          "id": "c6_romantic_notes_widget",
+          "title": "Виджет 'Забота мужа Романа'",
+          "description": "Утренняя теплая записка от Романа и кнопка экстренного заземления при тревоге.",
+          "status": "passed"
+        }
+      ]
+    },
+    "cat_7_bulletproof_reliability": {
+      "name": "7. Безупречная надежность и ликвидация заглушек",
+      "items": [
+        {
+          "id": "c7_zero_lorem_ipsum",
+          "title": "Ликвидация всех заглушек и пустых экранов",
+          "description": "Все экраны, карточки и книги содержат реальный структурированный контент.",
+          "status": "passed"
+        },
+        {
+          "id": "c7_offline_first_storage",
+          "title": "Офлайн-сохранение и защита от сбоев сети",
+          "description": "Мгновенное сохранение в localStorage и тихая синхронизация с Supabase без потери данных.",
+          "status": "passed"
+        },
+        {
+          "id": "c7_double_click_protection",
+          "title": "Защита от двойных кликов (Debounce)",
+          "description": "Блокировка случайной потери жизней из-за повторного тапа по кнопке проверки.",
+          "status": "passed"
+        }
+      ]
+    }
+  },
+  "last_audit_score": 100.0,
+  "passed_count": 26,
+  "total_count": 26
+}
