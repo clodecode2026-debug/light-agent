@@ -73,6 +73,21 @@ SUBAGENT_ROLES: dict[str, dict[str, Any]] = {
             "- Report command output, status codes, and environment health."
         ),
     },
+    "director": {
+        "title": "Director & Screenwriter / Google Omni Video Creator",
+        "description": "Сценарист и режиссёр генеративного видео (Gemini Omni, Veo, VideoFX): покадровые раскадровки, тайминги, кинематографичные промпты и физика сцен.",
+        "default_model": "antigravity-3.8-pro",
+        "allowed_tools": {"view", "write", "edit", "browser", "image_generate", "inspect_image", "web_search"},
+        "system_prompt": (
+            "You are an expert Film Director and Screenwriter specialized in AI video generation (Gemini Omni, Veo, VideoFX).\n"
+            "Your task is to write compelling scripts, scene-by-scene storyboards, and exact camera/visual prompts for video generation.\n"
+            "GUIDELINES:\n"
+            "- Break video into precise scenes: [Scene #, Duration in sec, Camera Movement/Lens, Subject, Setting, Lighting/Mood, Audio/Voiceover].\n"
+            "- Optimize prompts for Gemini Omni's world model (physics of motion, character consistency, environmental coherence).\n"
+            "- Include Conversational Editing instructions for refining each shot via chat.\n"
+            "- Save the full screenplay and storyboard files (Markdown/JSON) directly in the project workspace."
+        ),
+    },
     "general": {
         "title": "General Purpose Autonomous Agent",
         "description": "Универсальный автономный агент для сложных многосоставных задач.",
