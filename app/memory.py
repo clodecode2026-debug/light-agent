@@ -181,13 +181,23 @@ def delete_session(session_id: str) -> bool:
 
 
 def status() -> dict:
+    client = _get_client()
+    if client is None:
+        return {"enabled": False, "service": "local", "messages": 0}
+    total = 0
+    try:
+        r = client.table(TABLE).select("id", count="exact").neq("project", "ai-wife-coach").execute()
+        total = r.count or 0
+    except Exception:
+        pass
     return {
-        "enabled": _get_client() is not None,
+        "enabled": True,
         "service": "supabase",
+        "messages": total,
     }
 
 
-def list_sessions(limit: int = 50, project: str | None = None) -> list[dict]:
+def list_sessions(limit: int = 100, project: str | None = None) -> list[dict]:
     """Сессии с названием и датой для отображения на любом устройстве.
 
     Если указан project, фильтрует сессии по проекту.
@@ -200,9 +210,11 @@ def list_sessions(limit: int = 50, project: str | None = None) -> list[dict]:
         q = (client.table(TABLE)
              .select("session_id, created_at, role, content, project")
              .order("id", desc=True)
-             .limit(600))
-        if project:
+             .limit(2500))
+        if project and project != "all":
             q = q.eq("project", project)
+        else:
+            q = q.neq("project", "ai-wife-coach")
         resp = q.execute()
     except Exception:
         return _local_list_sessions(limit, project)
@@ -223,8 +235,8 @@ def list_sessions(limit: int = 50, project: str | None = None) -> list[dict]:
         sessions[sid]["message_count"] += 1
         if not sessions[sid]["title"] and row.get("role") == "user" and row.get("content"):
             title = row["content"].strip().replace("\n", " ")
-            if len(title) > 36:
-                title = title[:35] + "…"
+            if len(title) > 40:
+                title = title[:39] + "…"
             sessions[sid]["title"] = title
 
     out = []
