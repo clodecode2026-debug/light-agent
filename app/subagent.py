@@ -1,225 +1,195 @@
-"""Управление субагентами: запуск специализированных изолированных агентов.
+"""Модуль субагентов по стандарту Claude Code.
 
-Субагенты работают на том же сервере с тем же API-ключом Antigravity Pro,
-но имеют:
-- собственный специализированный системный промпт;
-- изолированный контекст сообщений (не засоряют историю основного чата);
-- строго ограниченный набор инструментов (без возможности рекурсивно плодить субагентов);
-- защиту от зависаний (лимит шагов и таймаут).
+Каждый субагент:
+- Запускается в изолированном контексте сообщений (не засоряет основной диалог).
+- Имеет чёткую специализацию и доступ только к необходимым инструментам.
+- Работает автономно до выполнения подзадачи или исчерпания лимита шагов.
+- Возвращает структурированный отчёт главному агенту.
 """
 import concurrent.futures
 import time
-from typing import Any
+from typing import Any, Callable
 
 from . import config, llm
 
-MAX_SUBAGENT_STEPS = 6
-SUBAGENT_TIMEOUT_SECONDS = 75
+MAX_SUBAGENT_STEPS = 40
+SUBAGENT_TIMEOUT_SECONDS = 600
 
-ROLE_PRESETS: dict[str, dict[str, Any]] = {
+SUBAGENT_ROLES: dict[str, dict[str, Any]] = {
     "researcher": {
-        "title": "Исследователь (Researcher)",
+        "title": "Researcher / Explorer",
+        "description": "Исследование кодовой базы, документации, поиск в интернете и GitHub. Только чтение.",
         "default_model": "antigravity-3.8-flash",
-        "allowed_tools": {
-            "web_search", "fetch_url", "github_search",
-            "read_file", "grep", "list_files", "tree", "view_image",
-        },
+        "allowed_tools": {"view", "glob", "grep", "web_search", "fetch_url"},
         "system_prompt": (
-            "Ты — автономный субагент-исследователь (Researcher).\n"
-            "Твоя задача — исследовать информацию в интернете, документации или на GitHub, "
-            "изучить файлы проекта и подготовить для главного агента чёткую структурированную выжимку.\n"
-            "ПРАВИЛА:\n"
-            "1. Не создавай и не изменяй файлы проекта (ты работаешь только в режиме чтения и поиска).\n"
-            "2. Предоставляй только проверенные факты, точные ссылки и конкретные примеры кода/API.\n"
-            "3. Отвечай кратко, ёмко, по существу поставленной задачи."
+            "You are an expert Researcher/Explorer subagent.\n"
+            "Your task is to investigate the codebase, find relevant files, read documentation or search the web.\n"
+            "GUIDELINES:\n"
+            "- You operate in READ-ONLY mode. Do not write or edit any files.\n"
+            "- Find facts, line numbers, function signatures, and root causes.\n"
+            "- Provide concise, exact findings so the primary agent can take action directly."
         ),
     },
     "coder": {
-        "title": "Разработчик (Coder)",
+        "title": "Coder / Software Engineer",
+        "description": "Написание нового кода, точечный рефакторинг и исправление модулей.",
         "default_model": "antigravity-3.8-pro",
-        "allowed_tools": {
-            "write_file", "edit_file", "read_file", "validate_code",
-            "list_files", "grep", "tree",
-        },
+        "allowed_tools": {"view", "edit", "write", "glob", "grep", "bash"},
         "system_prompt": (
-            "Ты — автономный субагент-разработчик (Coder).\n"
-            "Твоя задача — написать, доработать или отрефакторить конкретный модуль/файл проекта строго по заданию главного агента.\n"
-            "ПРАВИЛА:\n"
-            "1. Создавай чистый, рабочий, документированный код через write_file или edit_file.\n"
-            "2. ОБЯЗАТЕЛЬНО проверяй синтаксис: если при записи возникло предупреждение автопроверки, немедленно исправь его.\n"
-            "3. После написания вызывай validate_code для проверки созданных файлов.\n"
-            "4. В конце кратко отчитайся, какие файлы созданы/изменены и что в них реализовано."
+            "You are an expert Coder subagent.\n"
+            "Your task is to implement or refactor a specific module/function according to the primary agent's instructions.\n"
+            "GUIDELINES:\n"
+            "- Prefer editing existing files with `edit` rather than creating new ones.\n"
+            "- Maintain codebase style, imports, and clean structure.\n"
+            "- Verify code syntax and logic before finishing.\n"
+            "- Report clearly which files and lines were modified."
         ),
     },
     "tester": {
-        "title": "Тестировщик и Ревьюер (Tester / QA)",
+        "title": "Tester / QA & Verification",
+        "description": "Запуск тестов, поиск краевых случаев, проверка работоспособности сервиса.",
         "default_model": "antigravity-3.8-flash",
-        "allowed_tools": {
-            "read_file", "validate_code", "run_test",
-            "execute_code", "run_python_file", "list_files", "grep",
-        },
+        "allowed_tools": {"bash", "view", "glob", "grep"},
         "system_prompt": (
-            "Ты — автономный субагент-тестировщик и ревьюер (Tester / QA).\n"
-            "Твоя задача — протестировать код проекта, запустить валидацию и тесты, выявить баги и краевые случаи.\n"
-            "ПРАВИЛА:\n"
-            "1. Запускай validate_code и run_test, при необходимости проверяй логику через execute_code / run_python_file.\n"
-            "2. Проверь обработку ошибок, валидацию входных данных, типизацию и импорты.\n"
-            "3. В отчёте укажи:\n"
-            "   - Статус проверок (пройдено / ошибки);\n"
-            "   - Конкретные найденные баги и файлы/строки, где они находятся;\n"
-            "   - Рекомендации по исправлению."
+            "You are an expert QA and Testing subagent.\n"
+            "Your task is to run unit tests, integration tests, or smoke tests and verify correctness.\n"
+            "GUIDELINES:\n"
+            "- Use `bash` to execute tests (pytest, unittest, npm test) and check return codes.\n"
+            "- Report failing assertions, stack traces, and exact files/lines that need fixing.\n"
+            "- If all tests pass, report clear confirmation."
         ),
     },
-    "custom": {
-        "title": "Специалист (Custom Agent)",
+    "devops": {
+        "title": "DevOps / Infrastructure Engineer",
+        "description": "Управление серверами, API облачных провайдеров, настройка окружения и git.",
         "default_model": "antigravity-3.8-flash",
-        "allowed_tools": {
-            "read_file", "write_file", "edit_file", "validate_code",
-            "run_test", "execute_code", "run_python_file",
-            "web_search", "fetch_url", "github_search",
-            "list_files", "tree", "grep",
-        },
+        "allowed_tools": {"bash", "view", "edit", "write"},
         "system_prompt": (
-            "Ты — автономный специализированный субагент.\n"
-            "Твоя задача — выполнить порученную главным агентом подзадачу качественно и без лишних слов.\n"
-            "Используй доступные инструменты и в конце предоставь конкретный результат."
+            "You are an expert DevOps subagent.\n"
+            "Your task is to configure environments, install dependencies, manage git, and call cloud APIs.\n"
+            "GUIDELINES:\n"
+            "- Use `bash` to execute commands (pip, npm, git, curl) and inspect outputs.\n"
+            "- Only perform operations explicitly requested in the task.\n"
+            "- Report command output, status codes, and environment health."
+        ),
+    },
+    "general": {
+        "title": "General Purpose Autonomous Agent",
+        "description": "Универсальный автономный агент для сложных многосоставных задач.",
+        "default_model": "antigravity-3.8-flash",
+        "allowed_tools": {"view", "edit", "write", "bash", "glob", "grep", "web_search", "fetch_url"},
+        "system_prompt": (
+            "You are an expert General-Purpose autonomous subagent.\n"
+            "Your task is to solve the assigned subproblem carefully, efficiently, and with minimal overhead.\n"
+            "Use the provided tools and provide a clear, technical end-of-task summary."
         ),
     },
 }
 
 
-def _execute_subagent(role: str, task: str, model: str = "", project: str = "") -> str:
-    """Внутренний цикл выполнения субагента."""
-    from . import tools
-
-    role_key = (role or "custom").strip().lower()
-    preset = ROLE_PRESETS.get(role_key, ROLE_PRESETS["custom"])
-    title = preset["title"]
-    chosen_model = (model or "").strip() or preset["default_model"]
-
-    # Изолируем проект
-    proj = project or config.get_current_project()
-    config.set_current_project(proj)
-
-    # Формируем список разрешённых инструментов
-    allowed = preset["allowed_tools"]
-    all_specs = tools.build_tools()
-    tool_specs = [s for s in all_specs if s.get("function", {}).get("name") in allowed]
-
-    messages = [
-        {"role": "system", "content": preset["system_prompt"]},
-        {"role": "user", "content": task},
+def list_roles() -> list[dict]:
+    """Возвращает список доступных ролей субагентов для инструментов."""
+    return [
+        {
+            "role": k,
+            "title": v["title"],
+            "description": v["description"],
+            "tools": sorted(list(v["allowed_tools"])),
+        }
+        for k, v in SUBAGENT_ROLES.items()
     ]
 
-    steps_log: list[str] = []
-    final_answer = ""
-    start_t = time.perf_counter()
 
-    for step in range(MAX_SUBAGENT_STEPS):
-        try:
-            resp = llm.chat(messages, tools=tool_specs, model=chosen_model)
-        except Exception as exc:
+def run_subagent(
+    role: str,
+    task: str,
+    model: str = "",
+    project: str = "",
+    on_event: Callable[[str, dict], None] | None = None,
+) -> str:
+    """Выполняет задачу в изолированном контексте субагента."""
+    from . import tools
+
+    role_key = (role or "general").strip().lower()
+    preset = SUBAGENT_ROLES.get(role_key, SUBAGENT_ROLES["general"])
+    chosen_model = (model or "").strip() or preset["default_model"]
+    allowed_tool_names = preset["allowed_tools"]
+
+    # Формируем набор спецификаций инструментов, разрешённых роли
+    all_specs = tools.build_tools()
+    tool_specs = [
+        spec for spec in all_specs
+        if spec["function"]["name"] in allowed_tool_names
+    ]
+
+    messages: list[dict] = [
+        {"role": "system", "content": preset["system_prompt"]},
+        {"role": "user", "content": f"SUBAGENT TASK ({preset['title']}):\n{task}"},
+    ]
+
+    history_log: list[str] = []
+    start_time = time.perf_counter()
+
+    def emit_sub(kind: str, payload: dict) -> None:
+        if on_event:
+            try:
+                on_event("subagent", {"role": role_key, "kind": kind, **payload})
+            except Exception:
+                pass
+
+    emit_sub("start", {"task": task[:120]})
+
+    step = 0
+    while step < MAX_SUBAGENT_STEPS:
+        step += 1
+        if time.perf_counter() - start_time > SUBAGENT_TIMEOUT_SECONDS:
             return (
-                f"❌ Субагент [{title}] завершился с ошибкой LLM: {exc}\n"
-                f"Выполненные шаги: {', '.join(steps_log) if steps_log else 'нет'}"
+                f"⏱️ Субагент [{preset['title']}] превысил таймаут ({SUBAGENT_TIMEOUT_SECONDS} сек).\n"
+                f"Выполненные шаги:\n" + "\n".join(f"- {h}" for h in history_log)
             )
 
-        tool_calls = resp.get("tool_calls", [])
-        if not tool_calls:
-            final_answer = (resp.get("content") or "").strip()
-            break
+        try:
+            resp = llm.chat(messages, tools=tool_specs, model=chosen_model, temperature=0.3)
+        except Exception as exc:
+            return f"❌ Ошибка вызова модели субагента [{preset['title']}]: {exc}"
 
-        # Добавляем вызов модели в историю
+        tool_calls = resp.get("tool_calls") or []
+        if not tool_calls:
+            # Модель дала финальный ответ
+            answer = (resp.get("content") or "").strip()
+            emit_sub("done", {"summary": answer[:150]})
+            return f"### Результат субагента [{preset['title']}]:\n\n{answer}"
+
         messages.append({
             "role": "assistant",
             "content": resp.get("content") or "",
             "tool_calls": [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["raw"] or "{}"},
-                }
+                {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": tc.get("raw") or "{}"}}
                 for tc in tool_calls
             ],
         })
 
         for tc in tool_calls:
-            t_name = tc.get("name", "")
-            t_args = tc.get("args", {})
-            if t_name not in allowed:
-                out = f"Инструмент '{t_name}' запрещён для субагента {title}."
-            else:
-                out = tools.execute(t_name, t_args)
+            tname = tc["name"]
+            targs = tc.get("args") or {}
 
-            steps_log.append(f"{t_name}")
+            # Защита от несанкционированного инструмента
+            if tname not in allowed_tool_names:
+                out = f"Инструмент '{tname}' не разрешён для роли {role_key}."
+            else:
+                emit_sub("tool", {"tool": tname, "args": targs})
+                out = tools.execute(tname, targs)
+
+            preview = f"{tname}: {out[:120]}..." if len(out) > 120 else f"{tname}: {out}"
+            history_log.append(preview)
+
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": str(out)[:5000],
+                "content": out[:6000],
             })
-
-    elapsed = round(time.perf_counter() - start_t, 2)
-    if not final_answer:
-        try:
-            # Если субагент израсходовал лимит шагов на вызовы инструментов, просим его подвести итог
-            messages.append({
-                "role": "user",
-                "content": "Сформулируй краткий финальный отчёт по результатам выполненных действий и проверок.",
-            })
-            resp = llm.chat(messages, tools=None, model=chosen_model)
-            final_answer = (resp.get("content") or "").strip()
-        except Exception:
-            final_answer = f"Завершено. Вызовы инструментов: {', '.join(steps_log)}."
-
-    if not final_answer:
-        final_answer = f"Шаги выполнены: {', '.join(steps_log)}."
 
     return (
-        f"✅ [Результат субагента: {title}]\n"
-        f"Модель: {chosen_model} | Время: {elapsed}с | Шагов: {len(steps_log)}\n\n"
-        f"{final_answer}"
+        f"⚠️ Субагент [{preset['title']}] достиг лимита шагов ({MAX_SUBAGENT_STEPS}).\n"
+        f"Выполненные операции:\n" + "\n".join(f"- {h}" for h in history_log[-5:])
     )
-
-
-def tool_delegate_task(role: str, task: str, model: str = "") -> str:
-    """Делегирует подзадачу автономному субагенту с изолированным контекстом.
-
-    Роли:
-      - 'researcher': Поиск в интернете, документации, коде и на GitHub (режим чтения).
-      - 'coder': Разработка, правка и написание файлов с автовалидацией кода.
-      - 'tester': Запуск автотестов, синтаксический анализ и поиск краевых случаев.
-      - 'custom': Универсальный субагент под нестандартные задачи.
-
-    Параметры:
-      role — роль субагента ('researcher', 'coder', 'tester', 'custom')
-      task — подробное описание задачи с контекстом
-      model — модель (по умолчанию: antigravity-3.8-flash для быстрого ресерча/тестов,
-              antigravity-3.8-pro для сложного кодинга)
-    """
-    if not (task or "").strip():
-        return "Ошибка: не указано задание для субагента (task)."
-
-    cur_proj = config.get_current_project()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_execute_subagent, role=role, task=task, model=model, project=cur_proj)
-        try:
-            return fut.result(timeout=SUBAGENT_TIMEOUT_SECONDS)
-        except concurrent.futures.TimeoutError:
-            return (
-                f"⏱️ Превышен лимит времени выполнения субагента ({SUBAGENT_TIMEOUT_SECONDS} сек). "
-                f"Субагент '{role}' был остановлен."
-            )
-        except Exception as exc:
-            return f"❌ Ошибка при выполнении субагента '{role}': {exc}"
-
-
-def tool_subagent_roles() -> str:
-    """Возвращает информацию о доступных ролях субагентов и их возможностях."""
-    lines = ["Доступные роли субагентов в системе:"]
-    for key, p in ROLE_PRESETS.items():
-        tools_str = ", ".join(sorted(p["allowed_tools"]))
-        lines.append(f"\n• **{p['title']}** (`{key}`):")
-        lines.append(f"  Модель по умолчанию: `{p['default_model']}`")
-        lines.append(f"  Разрешённые инструменты: {tools_str}")
-    return "\n".join(lines)
