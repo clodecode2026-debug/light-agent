@@ -501,6 +501,68 @@ def tool_browser_import_cookies(cookies: str, url: str = "https://www.google.com
         return f"Ошибка импорта cookies: {exc}"
 
 
+def _get_ffmpeg_cmd() -> list[str]:
+    """Возвращает путь к исполняемому файлу FFmpeg (из imageio_ffmpeg или системный)."""
+    try:
+        import imageio_ffmpeg
+        return [imageio_ffmpeg.get_ffmpeg_exe()]
+    except Exception:
+        return ["ffmpeg"]
+
+
+def tool_video_extract_last_frame(video_path: str, output_name: str = "") -> str:
+    """Извлекает последний кадр из MP4 видео для непрерывной генерации следующей сцены в Gemini Omni/Veo."""
+    try:
+        v_path = _safe_path(video_path)
+        if not v_path.is_file():
+            return f"Файл видео не найден: {video_path}"
+        out_filename = output_name.strip() if output_name else f"{v_path.stem}_last_frame.png"
+        out_path = _ws() / out_filename
+        ffmpeg_bin = _get_ffmpeg_cmd()
+        # -sseof -0.1 берёт кадр за 0.1 секунды до конца видео, гарантируя валидный финальный фрейм
+        cmd = [*ffmpeg_bin, "-y", "-sseof", "-0.1", "-i", str(v_path), "-frames:v", "1", "-update", "1", str(out_path)]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if p.returncode != 0:
+            return f"Ошибка извлечения кадра FFmpeg (код {p.returncode}): {p.stderr[:300]}"
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            return f"Кадр не был сохранен: {out_filename}"
+        return f"Последний кадр успешно извлечён: {out_filename} ({out_path.stat().st_size} байт). Готов как Starting Frame для следующей сцены."
+    except Exception as exc:
+        return f"Ошибка извлечения последнего кадра: {exc}"
+
+
+def tool_video_concat(video_paths: list[str], output_name: str = "full_video.mp4") -> str:
+    """Бесшовно склеивает список видеоклипов (MP4) в единый мастер-ролик через FFmpeg."""
+    try:
+        if not video_paths:
+            return "Список видео пуст."
+        real_paths = []
+        for p in video_paths:
+            sp = _safe_path(p)
+            if not sp.is_file():
+                return f"Видеофайл для склейки не найден: {p}"
+            real_paths.append(sp)
+        out_path = _ws() / output_name
+        list_file = _ws() / "concat_list.tmp.txt"
+        lines = [f"file '{p.resolve()}'" for p in real_paths]
+        list_file.write_text("\n".join(lines), encoding="utf-8")
+        ffmpeg_bin = _get_ffmpeg_cmd()
+        cmd = [*ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(out_path)]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            cmd_reencode = [*ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c:v", "libx264", "-c:a", "aac", str(out_path)]
+            p = subprocess.run(cmd_reencode, capture_output=True, text=True, timeout=120)
+        try:
+            list_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if p.returncode != 0:
+            return f"Ошибка склейки FFmpeg: {p.stderr[:300]}"
+        return f"Видео успешно склеено: {output_name} ({out_path.stat().st_size} байт, объединены {len(real_paths)} сцен)."
+    except Exception as exc:
+        return f"Ошибка склейки видео: {exc}"
+
+
 # ---------------- Спецификации инструментов ----------------
 
 def _tool(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -662,6 +724,20 @@ def build_tools() -> list[dict]:
             ["cookies"],
         ),
         _tool(
+            "video_extract_last_frame",
+            "Извлекает последний кадр из MP4 видеофайла для передачи как Starting Frame следующей сцены в Gemini Omni/Veo (гарантирует непрерывность видеоряда без швов).",
+            {"video_path": {"type": "string", "description": "Путь к исходному MP4 видеофайлу в проекте"},
+             "output_name": {"type": "string", "description": "Имя сохраняемого PNG файла (по умолч. <video>_last_frame.png)"}},
+            ["video_path"],
+        ),
+        _tool(
+            "video_concat",
+            "Бесшовно склеивает список видеоклипов MP4 в единый мастер-ролик через FFmpeg.",
+            {"video_paths": {"type": "array", "items": {"type": "string"}, "description": "Список путей к сценам по порядку: ['scene_1.mp4', 'scene_2.mp4']"},
+             "output_name": {"type": "string", "description": "Имя итогового файла (по умолч. 'full_video.mp4')"}},
+            ["video_paths"],
+        ),
+        _tool(
             "web_search",
             "Поиск информации в интернете.",
             {"query": {"type": "string", "description": "Поисковый запрос"}},
@@ -689,6 +765,8 @@ _REGISTRY = {
     "inspect_image": tool_inspect_image,
     "browser": tool_browser,
     "browser_import_cookies": tool_browser_import_cookies,
+    "video_extract_last_frame": tool_video_extract_last_frame,
+    "video_concat": tool_video_concat,
     "web_search": tool_web_search,
     "fetch_url": tool_fetch_url,
     "move_file": tool_move_file,
