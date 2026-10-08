@@ -1,0 +1,96 @@
+/* Дополнительные стили для мобильного PWA интерфейса уровня iOS и Duolingo */
+* {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+body {
+    overscroll-behavior-y: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Touch-friendly кнопки по стандартам Apple HIG (минимум 44x44px) */
+button, .touch-btn {
+    min-height: 44px;
+    touch-action: manipulation;
+}
+
+/* Цветовые маркеры артиклей немецкого языка */
+.art-der {
+    color: #2563eb !important; /* Сапфировый синий */
+    font-weight: 700;
+}
+.art-die {
+    color: #e11d48 !important; /* Кораллово-розовый */
+    font-weight: 700;
+}
+.art-das {
+    color: #059669 !important; /* Изумрудный зеленый */
+    font-weight: 700;
+}
+.art-die-pl {
+    color: #d97706 !important; /* Янтарный для множественного числа */
+    font-weight: 700;
+}
+
+/* 3D-эффект вдавливания кнопок Duolingo */
+.duo-btn-primary {
+    background-color: #58cc02;
+    box-shadow: 0 4px 0 #46a302;
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+.duo-btn-primary:active {
+    transform: translateY(3px);
+    box-shadow: 0 1px 0 #46a302;
+}
+
+.duo-btn-secondary {
+    background-color: #ffffff;
+    border: 2px solid #e5e7eb;
+    box-shadow: 0 4px 0 #e5e7eb;
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+.duo-btn-secondary:active {
+    transform: translateY(3px);
+    box-shadow: 0 1px 0 #e5e7eb;
+}
+
+/* Карточки-флипы с 3D поворотом */
+.perspective-1000 {
+    perspective: 1000px;
+}
+.transform-style-preserve-3d {
+    transform-style: preserve-3d;
+}
+.backface-hidden {
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+.rotate-y-180 {
+    transform: rotateY(180deg);
+}
+
+.tab-content {
+    animation: fadeIn 0.25s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(244, 63, 94, 0.2);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(244, 63, 94, 0.4);
+}
