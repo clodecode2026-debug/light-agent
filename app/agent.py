@@ -1,11 +1,11 @@
-"""Цикл агента: вызов LLM, выполнение инструментов, итерации до ответа.
+"""Главный исполнительный цикл агента по архитектуре Claude Code.
 
-Ключевые решения:
-- Работает в отдельном потоке, потому что LLM-вызов блокирующий. Иначе один
-  долгий запрос вешает весь сервер на 30+ секунд.
-- Поддерживает отмену: пользователь может прервать задачу.
-- Отдаёт события прогресса через колбэк, чтобы интерфейс показывал,
-  что агент делает прямо сейчас.
+Особенности:
+- Чистый ReAct-цикл (Reasoning + Acting).
+- Поддержка отмены пользователем на лету (cancel).
+- Потоковая передача событий (SSE) для красивого отображения в веб-интерфейсе.
+- Безопасное сжатие контекста сообщений без потери ключевых целей.
+- Защита от зацикливаний на повторяющихся ошибках инструментов.
 """
 import threading
 import time
@@ -13,11 +13,11 @@ from concurrent.futures import Future as _Future
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from . import config, llm, memory, project_state, tools
+from . import config, llm, memory, tools
 
-MAX_STEPS = 100          # Базовый лимит до 100 шагов (поддерживает бесконечный режим)
-MAX_TOOL_OUTPUT = 8000   # сколько символов вывода инструмента уходит модели
-MAX_LOOP_REPEATS = 4     # предотвращение зацикливания на одинаковых вызовах с теми же аргументами
+MAX_STEPS = 500          # Неограниченный простор для масштабного сканирования и работы
+MAX_TOOL_OUTPUT = 32000  # До 32 КБ вывода инструмента (хватает для сотен файлов без обрезки)
+MAX_LOOP_REPEATS = 4     # Предотвращение зацикливания на одинаковых вызовах
 
 _step_counter = {"count": 0}
 _last_activity = {"ts": time.time()}
@@ -25,7 +25,6 @@ _active_cancel: dict[str, threading.Event] = {}
 
 
 def touch() -> None:
-    """Отмечает активность — используется anti-sleep таймером."""
     _last_activity["ts"] = time.time()
     _step_counter["count"] = 0
 
@@ -44,34 +43,22 @@ def state() -> dict:
 
 def _log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    print(f"[{ts}] [ClaudeCode] {msg}", flush=True)
 
 
 def cancel(session_id: str) -> bool:
-    """Просит текущую задачу сессии остановиться."""
     ev = _active_cancel.get(session_id)
     if ev is None:
         return False
     ev.set()
-    _log(f"cancel requested for {session_id}")
+    _log(f"Cancel requested for session: {session_id}")
     return True
 
 
 def _build_messages(session_id: str, user_message: str,
                     history: list[dict] | None, project: str = "default") -> list[dict]:
-    """Собирает контекст для LLM.
-
-    Сводка о прошлом вклеивается в ТОТ ЖЕ системный промпт. Два
-    system-сообщения подряд модель читает плохо: отвечает "OK" на первый
-    попавшийся вопрос, а не на последний.
-    """
-    system = tools.SYSTEM_PROMPT
-    try:
-        passport = project_state.format_passport_prompt(project)
-        if passport:
-            system += "\n\n" + passport
-    except Exception:
-        pass
+    """Собирает контекст сообщений с актуальным системным промптом."""
+    system_prompt = tools.get_claude_system_prompt(project)
     messages: list[dict] = []
 
     if history is not None:
@@ -80,18 +67,13 @@ def _build_messages(session_id: str, user_message: str,
                 messages.append({"role": m["role"], "content": m["content"]})
         messages.append({"role": "user", "content": user_message})
     else:
-        # build_context сам добавляет вопрос последним элементом — режем его.
         built = memory.build_context(session_id, user_message, project=project)
-        if built and built[0]["role"] == "system":
-            system += "\n\n" + built[0]["content"]
-            fresh = built[1:-1]
-        else:
-            fresh = built[:-1]
+        fresh = built[1:-1] if (built and built[0]["role"] == "system") else built[:-1]
         for m in fresh:
             messages.append({"role": m["role"], "content": m["content"]})
         messages.append({"role": "user", "content": user_message})
 
-    messages.insert(0, {"role": "system", "content": system})
+    messages.insert(0, {"role": "system", "content": system_prompt})
     return messages
 
 
@@ -99,15 +81,9 @@ def run(user_message: str, session_id: str = "default",
         history: list[dict] | None = None,
         on_event=None, cancel_event: threading.Event | None = None,
         project: str = "default", model: str | None = None) -> dict:
-    """Выполняет задачу и возвращает финальный ответ.
-
-    on_event(kind: str, payload: dict) вызывается по ходу работы:
-      kind="step" — номер итерации
-      kind="tool" — модель вызвала инструмент
-    """
+    """Главный цикл выполнения задачи."""
     if cancel_event is None:
-        cancel_event = _active_cancel.setdefault(
-            session_id, threading.Event())
+        cancel_event = _active_cancel.setdefault(session_id, threading.Event())
 
     def emit(kind: str, payload: dict) -> None:
         if on_event is None:
@@ -115,16 +91,15 @@ def run(user_message: str, session_id: str = "default",
         try:
             on_event(kind, payload)
         except Exception:
-            pass  # ошибка интерфейса не должна ломать задачу
+            pass
 
-    # Изолируем рабочую директорию проекта для текущего потока агента
     config.set_current_project(project)
     touch()
     messages = _build_messages(session_id, user_message, history, project=project)
     memory.add_message(session_id, "user", user_message, project=project)
 
     tool_specs = tools.build_tools()
-    steps: list[str] = []
+    steps_log: list[str] = []
     provider_used = ""
     total_start = time.perf_counter()
     call_signatures: dict[str, int] = {}
@@ -139,48 +114,53 @@ def run(user_message: str, session_id: str = "default",
                     "ok": False, "cancelled": True,
                     "error": "Задача отменена пользователем",
                     "answer": "⏹ Задача отменена пользователем.",
-                    "steps": steps, "provider": provider_used,
+                    "steps": steps_log, "provider": provider_used,
                     "elapsed": round(time.perf_counter() - total_start, 2),
                 }
 
             emit("step", {"index": step, "max": max_steps_allowed})
 
-            # Сжатие длинной цепочки вызовов инструментов для экономии токенов модели
-            if len(messages) > 28:
-                # Оставляем системный промпт, исходный запрос пользователя и последние 18 сообщений
-                messages = [messages[0], messages[1]] + messages[-18:]
+            # Умное сжатие контекста при разрастании цепочки сообщений (>26 сообщений)
+            if len(messages) > 26:
+                # Сохраняем системный промпт, первое сообщение пользователя и последние 16 реплик
+                condensed_summary = {
+                    "role": "user",
+                    "content": f"[System Context: Ранее выполненные шаги (всего {step} шагов): " +
+                               "; ".join(steps_log[-6:]) + "]"
+                }
+                messages = [messages[0], messages[1], condensed_summary] + messages[-16:]
 
             try:
-                resp = llm.chat(messages, tools=tool_specs, model=model)
+                resp = llm.chat(messages, tools=tool_specs, model=model, temperature=0.2)
             except llm.LLMError as exc:
-                _log(f"LLM unavailable: {exc}")
+                _log(f"LLM Error: {exc}")
                 return {
                     "ok": False, "error": str(exc),
                     "answer": f"⚠️ Ошибка сервиса модели: {exc}",
-                    "steps": steps,
+                    "steps": steps_log,
                     "elapsed": round(time.perf_counter() - total_start, 2),
                 }
 
             provider_used = resp["provider"]
 
-            if not resp["tool_calls"]:
-                answer = (resp["content"] or "").strip() or "Готово."
+            # Если модель не вызвала инструменты — это финальный ответ
+            if not resp.get("tool_calls"):
+                answer = (resp.get("content") or "").strip() or "Готово."
                 memory.add_message(session_id, "assistant", answer, project=project)
-                _log(f"done in {round(time.perf_counter() - total_start, 2)}s "
-                     f"via {provider_used}, steps: {step}")
+                _log(f"Completed in {round(time.perf_counter() - total_start, 2)}s, steps: {step}")
                 return {
-                    "ok": True, "answer": answer, "steps": steps,
+                    "ok": True, "answer": answer, "steps": steps_log,
                     "provider": provider_used,
                     "elapsed": round(time.perf_counter() - total_start, 2),
                 }
 
+            # Добавляем реплику ассистента с вызовами инструментов
             messages.append({
                 "role": "assistant",
-                "content": resp["content"] or "",
+                "content": resp.get("content") or "",
                 "tool_calls": [
                     {"id": tc["id"], "type": "function",
-                     "function": {"name": tc["name"],
-                                  "arguments": tc["raw"] or "{}"}}
+                     "function": {"name": tc["name"], "arguments": tc.get("raw") or "{}"}}
                     for tc in resp["tool_calls"]
                 ],
             })
@@ -189,59 +169,63 @@ def run(user_message: str, session_id: str = "default",
             for tc in resp["tool_calls"]:
                 if cancel_event.is_set():
                     break
-                sig = f"{tc['name']}:{tc.get('raw', '')}"
+
+                tname = tc["name"]
+                targs = tc.get("args") or {}
+                sig = f"{tname}:{tc.get('raw', '')}"
                 call_signatures[sig] = call_signatures.get(sig, 0) + 1
+
                 if call_signatures[sig] >= MAX_LOOP_REPEATS:
                     loop_detected = True
-                    _log(f"Loop detected on tool {tc['name']} ({call_signatures[sig]} repeats)")
+                    _log(f"Loop detected on tool {tname} ({call_signatures[sig]} repeats)")
 
-                preview = ", ".join(
-                    f"{k}={str(v)[:40]}" for k, v in list(tc["args"].items())[:3])
-                emit("tool", {"name": tc["name"], "args": tc["args"],
-                              "preview": preview})
-                _log(f"tool {tc['name']}({preview})")
+                preview = ", ".join(f"{k}={str(v)[:40]}" for k, v in list(targs.items())[:3])
+                emit("tool", {"name": tname, "args": targs, "preview": preview})
+                _log(f"Tool call: {tname}({preview})")
 
                 if loop_detected:
                     output = (
-                        f"⛔ ПРЕДУПРЕЖДЕНИЕ: Инструмент {tc['name']} вызван повторно с теми же аргументами уже {call_signatures[sig]} раз! "
-                        f"Зацикливание остановлено. Проанализируй предыдущие ошибки или заверши задачу, предоставив ответ пользователю."
+                        f"⛔ Предупреждение: Инструмент {tname} вызван повторно с теми же аргументами уже {call_signatures[sig]} раз. "
+                        f"Остановитесь, смените подход или дайте ответ пользователю."
                     )
                 else:
-                    output = tools.execute(tc["name"], tc["args"])
+                    output = tools.execute(tname, targs)
 
                 trimmed = output[:MAX_TOOL_OUTPUT]
                 if len(output) > MAX_TOOL_OUTPUT:
-                    trimmed += (f"\n...[обрезано, было {len(output)} символов]")
+                    trimmed += f"\n...[обрезано, всего было {len(output)} символов]"
 
-                steps.append(f"{tc['name']}: {output[:200]}")
+                steps_log.append(f"{tname}: {output[:140]}")
                 _step_counter["count"] += 1
                 messages.append({
-                    "role": "tool", "tool_call_id": tc["id"], "content": trimmed,
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": trimmed,
                 })
 
-            # Если агент приближается к лимиту, но активно продуктивно работает без зацикливания — расширяем бюджет шагов
-            if step >= max_steps_allowed - 2 and not loop_detected and max_steps_allowed < 300:
-                max_steps_allowed += 20
-                _log(f"Dynamic step expansion: new max_steps = {max_steps_allowed}")
+            # Динамическое расширение лимита шагов при продуктивной работе (практически без лимита)
+            if step >= max_steps_allowed - 2 and not loop_detected and max_steps_allowed < 2000:
+                max_steps_allowed += 50
+                _log(f"Extended max_steps to {max_steps_allowed}")
 
-        err_msg = f"Выполнено максимальное количество шагов ({max_steps_allowed})."
-        recent = ("\nПоследние выполненные действия:\n" + "\n".join(f"- {s}" for s in steps[-4:])) if steps else ""
+        err_msg = f"Выполнен максимальный лимит шагов ({max_steps_allowed})."
+        recent = ("\nПоследние операции:\n" + "\n".join(f"- {s}" for s in steps_log[-5:])) if steps_log else ""
         return {
             "ok": False,
             "error": err_msg,
-            "answer": f"⚠️ {err_msg}{recent}\n\nЕсли требуется продолжить, просто напиши «продолжай».",
-            "steps": steps, "provider": provider_used,
+            "answer": f"⚠️ {err_msg}{recent}\n\nНапишите «продолжай», если требуется продолжить работу.",
+            "steps": steps_log,
+            "provider": provider_used,
             "elapsed": round(time.perf_counter() - total_start, 2),
         }
     finally:
-        # Убираем токен отмены, чтобы сессия не копила мусор
         _active_cancel.pop(session_id, None)
 
 
 def run_stream(user_message: str, session_id: str = "default",
                history: list[dict] | None = None, project: str = "default",
                model: str | None = None):
-    """Стриминг текста без инструментов — быстрый режим для вопросов."""
+    """Стриминг текста без инструментов."""
     config.set_current_project(project)
     touch()
     messages = _build_messages(session_id, user_message, history, project=project)
@@ -260,14 +244,14 @@ def run_stream(user_message: str, session_id: str = "default",
         memory.add_message(session_id, "assistant", answer, project=project)
 
 
-# Пул из одного потока: не даёт съесть память Render free (512 МБ).
-_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent")
+# Пул потоков для выполнения задач агента
+_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="claude_agent")
 
 
 def submit(session_id: str, message: str, history=None,
            on_event=None, project: str = "default",
            model: str | None = None) -> "Job":
-    """Запускает задачу в отдельном потоке."""
+    """Запускает задачу агента в пуле потоков."""
     ev = threading.Event()
     _active_cancel[session_id] = ev
     fut = _pool.submit(run, message, session_id, history, on_event, ev, project, model)
@@ -275,7 +259,7 @@ def submit(session_id: str, message: str, history=None,
 
 
 class Job:
-    """Обёртка над Future с отменой по сессии."""
+    """Обёртка над Future с возможностью отмены."""
 
     def __init__(self, fut: _Future, session_id: str):
         self._fut = fut
