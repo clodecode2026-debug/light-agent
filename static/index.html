@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ru" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AI Coach">
+    <meta name="application-name" content="AI Coach для Алины">
+    <meta name="theme-color" content="#fff1f2">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" sizes="512x512" href="/static/icons/icon-512.png">
+    <title>AI Coach для Алины — Психолог & Немецкий B1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .voice-bar { transition: height 0.08s ease-out; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-rose-50 via-pink-50 to-amber-50 h-[100dvh] text-slate-800 font-['Plus_Jakarta_Sans',sans-serif] flex flex-col overflow-hidden relative">
+
+    <!-- Верхняя шапка -->
+    <header class="bg-white/95 backdrop-blur-md border-b border-rose-100 shrink-0 z-30 shadow-sm pt-[env(safe-area-inset-top)]">
+        <div class="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 flex items-center justify-between">
+            <div class="flex items-center space-x-2.5">
+                <div class="relative cursor-pointer" onclick="switchTab('live')">
+                    <img src="/static/img/coach_avatar.jpg" alt="AI Coach" class="w-10 h-10 rounded-full object-cover border-2 border-rose-400 shadow-sm">
+                    <span class="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full"></span>
+                </div>
+                <div>
+                    <div class="flex items-center gap-1.5">
+                        <h1 class="font-bold text-sm bg-gradient-to-r from-rose-600 to-pink-600 bg-clip-text text-transparent">AI Coach для Алины</h1>
+                        <span class="text-[10px] bg-rose-100 text-rose-700 font-semibold px-1.5 py-0.2 rounded">B1 & КПТ</span>
+                    </div>
+                    <p class="text-[10px] text-slate-500 hidden sm:block">Профессиональный психолог, немецкий язык & поддержка любящего мужа Романа</p>
+                </div>
+            </div>
+            
+            <!-- Навигация на ПК -->
+            <nav class="hidden md:flex items-center space-x-1.5 bg-rose-50/80 p-1 rounded-xl border border-rose-100">
+                <button onclick="toggleSessionsDrawer()" class="px-2.5 py-1.5 text-xs font-semibold rounded-lg text-slate-700 hover:bg-rose-100/70 transition flex items-center gap-1" title="История диалогов">
+                    <span>🗂 Диалоги</span>
+                </button>
+                <button onclick="createNewChatSession()" class="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-rose-500 text-white shadow-sm hover:opacity-95 transition flex items-center gap-1">
+                    <span>＋ Новый</span>
+                </button>
+                <div class="h-4 w-px bg-rose-200 mx-1"></div>
+                <button onclick="switchTab('chat')" id="tab-btn-chat" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-rose-600 shadow-sm transition">💬 Диалог</button>
+                <button onclick="switchTab('live')" id="tab-btn-live" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-rose-600 transition">🎙 Live Voice</button>
+                <button onclick="switchTab('german')" id="tab-btn-german" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-rose-600 transition">🇩🇪 Немецкий</button>
+                <button onclick="switchTab('library')" id="tab-btn-library" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-rose-600 transition">📚 Книги</button>
+                <button onclick="switchTab('dossier')" id="tab-btn-dossier" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-rose-600 transition">💖 Досье</button>
+            </nav>
+
+            <!-- Мобильные быстрые кнопки шапки -->
+            <div class="flex md:hidden items-center gap-1.5">
+                <button onclick="toggleSessionsDrawer()" class="p-2 text-slate-600 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition" title="История диалогов">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"></path></svg>
+                </button>
+                <button onclick="createNewChatSession()" class="p-2 bg-rose-500 text-white rounded-lg shadow-sm hover:opacity-95 transition" title="Новый диалог">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Боковая панель (Шторка диалогов как в ChatGPT) -->
+    <div id="sessionsDrawer" class="fixed inset-0 z-50 pointer-events-none transition-opacity duration-300 opacity-0">
+        <!-- Backdrop -->
+        <div id="drawerBackdrop" onclick="toggleSessionsDrawer(false)" class="absolute inset-0 bg-slate-900/40 backdrop-blur-sm pointer-events-none transition-opacity"></div>
+        
+        <!-- Сайдбар контент -->
+        <div id="drawerContent" class="absolute top-0 left-0 bottom-0 w-72 sm:w-80 bg-white shadow-2xl flex flex-col transform -translate-x-full transition-transform duration-300 pointer-events-auto border-r border-rose-100">
+            <div class="p-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white flex items-center justify-between">
+                <div>
+                    <h3 class="font-bold text-sm">Мои диалоги с коучем</h3>
+                    <p class="text-[10px] text-rose-100">Синхронизировано с Supabase</p>
+                </div>
+                <button onclick="toggleSessionsDrawer(false)" class="p-1 rounded-lg hover:bg-white/20 transition">✕</button>
+            </div>
+
+            <div class="p-3 border-b border-rose-100">
+                <button onclick="createNewChatSession(); toggleSessionsDrawer(false);" class="w-full py-2.5 px-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white rounded-xl text-xs font-bold shadow-md hover:opacity-95 transition flex items-center justify-center gap-1.5">
+                    <span>＋ Новый разговор</span>
+                </button>
+            </div>
+
+            <!-- Список сессий -->
+            <div id="sessionsList" class="flex-1 overflow-y-auto p-2.5 space-y-1.5">
+                <div class="text-center py-6 text-slate-400 text-xs">Загрузка ваших диалогов...</div>
+            </div>
+
+            <!-- Нижний статус базы данных -->
+            <div class="p-3 bg-rose-50/50 border-t border-rose-100 text-[11px] text-slate-500 flex items-center justify-between">
+                <span class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    Память активна
+                </span>
+                <span class="text-[10px] text-rose-600 font-medium">Алина • 35 лет</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Основной контейнер содержимого -->
+    <main class="max-w-6xl mx-auto px-3 py-3 flex-1 w-full flex flex-col overflow-hidden pb-20 md:pb-3">
+
+        <!-- Баннер установки PWA на iPhone в 1 клик -->
+        <div id="iosInstallBanner" class="hidden shrink-0 mb-2 p-3 bg-gradient-to-r from-rose-500 via-pink-500 to-rose-600 text-white rounded-2xl shadow-lg border border-rose-300 flex items-center justify-between gap-3 animate-fade-in">
+            <div class="flex items-center gap-2.5">
+                <span class="text-2xl">📱</span>
+                <div>
+                    <div class="text-xs font-bold leading-tight">Установить AI Coach на iPhone:</div>
+                    <div class="text-[11px] text-rose-100 leading-tight mt-0.5">
+                        Нажмите кнопку <strong class="text-white bg-white/20 px-1 py-0.5 rounded">«Поделиться» ⎋</strong> внизу Safari, затем выберите <strong class="text-white underline">«На экран "Домой"» ⊞</strong>
+                    </div>
+                </div>
+            <button onclick="localStorage.setItem('ios_pwa_dismissed', 'true'); document.getElementById('iosInstallBanner').classList.add('hidden');" class="text-white/80 hover:text-white text-xs font-bold px-2 py-1 bg-white/20 hover:bg-white/30 rounded-lg shrink-0">
+                Понятно ✕
+            </button>
+        </div>
+
+        <!-- Баннер кратковременной потери связи (Offline / Bad network) -->
+        <div id="offlineNetworkBanner" class="hidden shrink-0 mb-2 p-2.5 bg-amber-500 text-white rounded-2xl shadow-md border border-amber-400 flex items-center justify-between gap-3 animate-fade-in">
+            <div class="flex items-center gap-2">
+                <span class="text-xl">📡</span>
+                <span class="text-xs font-bold leading-tight">Связь временно пропала. Ваш прогресс сохранён, ожидаем сеть...</span>
+            </div>
+            <span class="text-[11px] bg-white/20 px-2 py-0.5 rounded-lg shrink-0">Офлайн-режим</span>
+        </div>
+
+        <!-- ВКЛАДКА 1: ДИАЛОГ С КОУЧЕМ -->
+        <section id="tab-chat" class="tab-content flex-1 flex flex-col bg-white/95 backdrop-blur rounded-2xl shadow-xl border border-rose-100 overflow-hidden h-full">
+            <!-- Верхняя панель чата -->
+            <div class="bg-gradient-to-r from-rose-500 to-pink-500 px-4 py-3 text-white flex items-center justify-between shadow-sm shrink-0">
+                <div class="flex items-center gap-2.5">
+                    <img src="/static/img/coach_avatar.jpg" alt="Coach" class="w-8 h-8 rounded-full object-cover border border-white/50">
+                    <div>
+                        <h2 class="font-bold text-sm">Профессиональный диалог</h2>
+                        <p class="text-[10px] text-rose-100">КПТ, Транзактный анализ, системная психология</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="createNewChatSession()" class="text-xs bg-white/20 hover:bg-white/30 text-white px-2.5 py-1 rounded-lg transition font-medium flex items-center gap-1">
+                        <span>＋ Новый чат</span>
+                    </button>
+                    <button onclick="toggleSessionsDrawer()" class="text-xs bg-white/20 hover:bg-white/30 text-white px-2 py-1 rounded-lg transition font-medium" title="Список диалогов">
+                        <span>🗂</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Экспресс-чипы настроения, любви Романа и немецкого -->
+            <div class="px-3 py-2 bg-rose-50/50 border-b border-rose-100 flex gap-2 overflow-x-auto text-xs shrink-0 no-scrollbar">
+                <button onclick="showRomanLoveNoteModal()" class="whitespace-nowrap bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold px-3 py-1 rounded-full shadow-sm hover:opacity-95 transition flex items-center gap-1">
+                    <span>💌 Записка от Романа</span>
+                </button>
+                <button onclick="sendMoodPrompt('Роман рядом, мне нужна твоя экстренная поддержка и техника заземления.')" class="whitespace-nowrap bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold border border-rose-300 px-3 py-1 rounded-full shadow-sm transition flex items-center gap-1">
+                    <span>❤️ Рома рядом (SOS)</span>
+                </button>
+                <button onclick="startGermanPracticeInChat()" class="whitespace-nowrap bg-emerald-600 text-white font-semibold px-3 py-1 rounded-full shadow-sm hover:bg-emerald-700 transition flex items-center gap-1">
+                    <span>🇩🇪 Немецкий B1: Урок</span>
+                </button>
+                <button onclick="sendMoodPrompt('Я очень устала сегодня после работы, сил совсем нет...')" class="whitespace-nowrap bg-white hover:bg-rose-100 text-rose-700 border border-rose-200 px-3 py-1 rounded-full shadow-sm transition">☕️ Устала</button>
+                <button onclick="sendMoodPrompt('Мне тревожно и накатывает страх, помоги успокоиться методом КПТ.')" class="whitespace-nowrap bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 px-3 py-1 rounded-full shadow-sm transition">🌸 Тревожно</button>
+                <button onclick="sendMoodPrompt('Хочу обсудить отношения и диалог с мужем Романом.')" class="whitespace-nowrap bg-white hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1 rounded-full shadow-sm transition">💍 Роман и семья</button>
+                <button onclick="sendMoodPrompt('Помоги разобрать синдром отличницы и перфекционизм.')" class="whitespace-nowrap bg-white hover:bg-amber-100 text-amber-700 border border-amber-200 px-3 py-1 rounded-full shadow-sm transition">✨ Самооценка</button>
+            </div>
+
+            <!-- Область сообщений -->
+            <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-3.5">
+                <div class="flex items-start gap-2.5">
+                    <img src="/static/img/coach_avatar.jpg" alt="Coach" class="w-8 h-8 rounded-full object-cover border border-rose-200 shrink-0">
+                    <div class="bg-rose-50 border border-rose-100 rounded-2xl p-3.5 max-w-xl text-slate-700 text-xs sm:text-sm shadow-sm">
+                        <p class="font-semibold text-rose-900 mb-1">Здравствуй, дорогая Алина! ✨</p>
+                        <p>Я твой личный дипломированный психолог-коуч. Я помню всё о твоих целях, немецком языке (B1), ресурсе и поддержке твоего мужа Романа. Что сейчас у тебя на душе? Расскажи — я здесь, чтобы бережно и глубоко тебя поддержать.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Нижняя панель ввода сообщения -->
+            <div class="p-2.5 sm:p-3 bg-white border-t border-rose-100 flex items-center gap-2 shrink-0">
+                <input type="text" id="chatInput" placeholder="Алина, напиши, что у тебя на душе или задай вопрос..." class="flex-1 px-3.5 py-2.5 border border-rose-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-400 text-xs sm:text-sm bg-rose-50/30" onkeypress="if(event.key === 'Enter') sendMessage()">
+                
+                <button onclick="toggleRecordVoice()" id="recordBtn" class="p-2.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded-xl transition shrink-0" title="Голосовой ввод сообщения">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                </button>
+
+                <button onclick="sendMessage()" id="sendMsgBtn" class="bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold px-4 sm:px-5 py-2.5 rounded-xl shadow-md hover:opacity-95 transition flex items-center justify-center gap-1.5 shrink-0 text-xs sm:text-sm active:scale-95 whitespace-nowrap min-w-[95px]">
+                    <span>Отправить</span>
+                    <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                </button>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА 2: LIVE VOICE РЕЖИМ (С ФОТО КОУЧА И РЕАЛЬНЫМ ВИЗУАЛИЗАТОРОМ РЕЧИ) -->
+        <section id="tab-live" class="tab-content hidden flex-1 flex flex-col bg-gradient-to-br from-slate-950 via-purple-950 to-rose-950 text-white rounded-2xl shadow-2xl border border-purple-500/30 p-6 relative overflow-hidden items-center justify-between h-full">
+            <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(236,72,153,0.18),transparent_70%)] pointer-events-none"></div>
+            
+            <div class="text-center z-10 pt-2">
+                <span id="liveModeBadge" class="px-3 py-1 bg-rose-500/20 text-rose-300 rounded-full text-xs font-semibold border border-rose-500/30">Google Live Voice • Алина & Коуч</span>
+                <h2 id="liveTitleText" class="text-xl sm:text-2xl font-bold mt-2 bg-gradient-to-r from-rose-300 via-pink-300 to-amber-200 bg-clip-text text-transparent">Живой разговор</h2>
+                <p id="liveSubtitleText" class="text-xs text-slate-300 mt-1 max-w-md mx-auto">Коуч слушает ваш голос в реальном времени и отвечает емко, глубоко и бережно</p>
+                <div id="liveSwitchToCoachBtn" class="hidden mt-2">
+                    <button onclick="switchToCoachLiveMode()" class="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-amber-200 transition">
+                        🔄 Вернуться к коучу-психологу
+                    </button>
+                </div>
+            </div>
+
+            <!-- ИНТЕРАКТИВНЫЙ АВАТАР КОУЧА С АУДИО-ВИЗУАЛИЗАТОРОМ -->
+            <div class="flex flex-col items-center justify-center my-auto z-10 relative">
+                <!-- Ореол-аура вокруг фото -->
+                <div id="liveAvatarHalo" class="w-48 h-48 sm:w-56 sm:h-56 rounded-full flex items-center justify-center transition-all duration-300 relative cursor-pointer" onclick="toggleLiveVoiceState()">
+                    <div id="livePulseRing" class="absolute inset-0 rounded-full border-2 border-rose-400/40 pointer-events-none transition-all"></div>
+                    
+                    <!-- Само фото коуча -->
+                    <div class="w-44 h-44 sm:w-52 sm:h-52 rounded-full overflow-hidden border-4 border-rose-400/80 shadow-[0_0_50px_rgba(244,63,94,0.5)] z-10 relative">
+                        <img id="liveCoachImg" src="/static/img/coach_avatar.jpg" alt="Психолог-коуч" class="w-full h-full object-cover">
+                        <!-- Слой поверх фото при слушании -->
+                        <div id="liveListeningOverlay" class="absolute inset-0 bg-rose-500/10 opacity-0 transition-opacity"></div>
+                    </div>
+                </div>
+
+                <!-- Звуковой визуализатор-эквалайзер волны -->
+                <div id="liveAudioWaves" class="flex items-center gap-1.5 mt-5 h-8">
+                    <span class="voice-bar w-1.5 h-2 bg-rose-400 rounded-full"></span>
+                    <span class="voice-bar w-1.5 h-3 bg-pink-400 rounded-full"></span>
+                    <span class="voice-bar w-1.5 h-5 bg-rose-300 rounded-full"></span>
+                    <span class="voice-bar w-1.5 h-2 bg-purple-400 rounded-full"></span>
+                    <span class="voice-bar w-1.5 h-4 bg-pink-300 rounded-full"></span>
+                    <span class="voice-bar w-1.5 h-2 bg-rose-400 rounded-full"></span>
+                </div>
+
+                <p id="liveStatusText" class="text-sm font-semibold mt-4 text-rose-200">Нажмите на фото, чтобы начать разговор с коучем</p>
+                
+                <div id="liveTranscript" class="mt-3 px-4 py-2.5 bg-white/10 backdrop-blur-md rounded-xl text-xs text-slate-200 max-w-md text-center min-h-[44px] flex items-center justify-center border border-white/10 shadow-lg">
+                    Здесь появится реплика коуча...
+                </div>
+                <div id="livePauseIndicator" class="hidden text-[11px] text-amber-200 mt-1 flex items-center justify-center gap-2">
+                    <span id="livePauseText">⏳ Слушаю паузу (можно продолжать мысль)...</span>
+                    <button onclick="commitLiveSpeechImmediately()" class="underline hover:text-white font-semibold">Отправить ➔</button>
+                </div>
+            </div>
+
+            <!-- Нижние кнопки Live Voice -->
+            <div class="w-full max-w-md flex flex-col gap-2.5 z-10 pb-2">
+                <div class="flex gap-3">
+                    <button onclick="toggleLiveVoiceState()" id="liveMainBtn" class="flex-1 py-3 bg-gradient-to-r from-rose-500 to-pink-600 rounded-xl font-bold text-sm shadow-lg hover:opacity-95 transition">
+                        Начать говорить
+                    </button>
+                    <button onclick="switchTab('chat')" class="px-5 py-3 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-semibold transition">
+                        Текстовый чат
+                    </button>
+                </div>
+                <div class="flex items-center justify-center gap-2">
+                    <button onclick="toggleLiveSound()" id="liveSoundToggleBtn" class="text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-slate-200 flex items-center gap-1.5 transition">
+                        <span id="liveSoundIcon">🔇</span>
+                        <span id="liveSoundText">Звук: Выключен</span>
+                    </button>
+                    <button onclick="toggleSlowVoiceMode()" id="liveSlowToggleBtn" class="text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-slate-200 flex items-center gap-1.5 transition" title="Медленная четкая речь для лучшего понимания">
+                        <span id="liveSlowIcon">🐢</span>
+                        <span id="liveSlowText">Темп: 1.0x</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА 3: НЕМЕЦКИЙ ЯЗЫК (ДУОЛИНГО ДЛЯ АЛИНЫ: A1+ ➔ B1 НА 180 ДНЕЙ) -->
+        <section id="tab-german" class="tab-content hidden flex-1 flex flex-col bg-white/95 backdrop-blur rounded-2xl shadow-xl border border-rose-100 p-3 sm:p-4 overflow-hidden h-full">
+            <!-- Верхний статус-бар в стиле Duolingo -->
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 mb-2 border-b border-slate-100 shrink-0">
+                <div class="flex items-center gap-2">
+                    <img src="/static/duolingo/mascot.svg" class="w-8 h-8 shrink-0" alt="Owl">
+                    <div>
+                        <h2 class="text-sm sm:text-base font-black text-slate-800 flex items-center gap-1.5 leading-none">
+                            <span>Duolingo Deutsch</span>
+                            <span class="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">180 дней</span>
+                        </h2>
+                        <span class="text-[10px] text-slate-400">Старт с A1+ • Без детского алфавита</span>
+                    </div>
+                </div>
+
+                <!-- Уровни курса: A1+ Старт, A2 Жизнь, B1 Профи -->
+                <div class="flex items-center gap-1">
+                    <button onclick="setGermanLevel('A1+')" id="german-btn-a1" class="px-2.5 py-1 text-xs font-black rounded-xl bg-emerald-500 text-white shadow-sm transition">A1+ Старт</button>
+                    <button onclick="setGermanLevel('A2')" id="german-btn-a2" class="px-2.5 py-1 text-xs font-bold rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition">A2 Жизнь</button>
+                    <button onclick="setGermanLevel('B1')" id="german-btn-b1" class="px-2.5 py-1 text-xs font-bold rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition">B1 Профи</button>
+                </div>
+
+                <!-- Индикаторы Duolingo: Огонь серии, Опыт XP, Сердечки ❤️ -->
+                <div class="flex items-center gap-2.5 sm:gap-4 text-xs font-black">
+                    <div class="flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-1 rounded-xl border border-amber-200" title="Серия дней">
+                        <span>🔥</span>
+                        <span id="courseStreakDisplay">1 дн.</span>
+                    </div>
+                    <div class="flex items-center gap-1 text-sky-600 bg-sky-50 px-2 py-1 rounded-xl border border-sky-200" title="Очки опыта">
+                        <img src="/static/duolingo/points.svg" class="w-3.5 h-3.5" alt="XP">
+                        <span id="courseXpDisplay">0 XP</span>
+                    </div>
+                    <div onclick="lingoEngine.openHeartRefillModal()" class="flex items-center gap-1 text-rose-500 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-xl border border-rose-200 cursor-pointer transition shadow-2xs" title="Нажмите, чтобы восстановить сердечки">
+                        <img src="/static/duolingo/heart.svg" class="w-3.5 h-3.5" alt="Hearts">
+                        <span id="courseHeartsDisplay">5</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Переключатель: Дорожка обучения Duolingo vs Карточки слов Anki vs Работа над ошибками -->
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2 bg-slate-100/80 p-1 rounded-xl border border-slate-200 shrink-0">
+                <div class="flex gap-1">
+                    <button onclick="setGermanViewMode('path')" id="german-mode-path" class="px-3 py-1 text-xs font-black rounded-lg bg-white text-emerald-800 shadow-sm transition flex items-center gap-1.5">
+                        <span>🗺️</span>
+                        <span>Дорожка</span>
+                    </button>
+                    <button onclick="setGermanViewMode('flashcards')" id="german-mode-flashcards" class="px-3 py-1 text-xs font-bold rounded-lg text-slate-600 hover:text-slate-800 transition flex items-center gap-1.5">
+                        <span>📇</span>
+                        <span>Карточки (Anki)</span>
+                    </button>
+                    <button onclick="openMistakesModal()" id="german-mode-mistakes" class="px-3 py-1 text-xs font-bold rounded-lg text-rose-600 hover:bg-rose-50 transition flex items-center gap-1.5">
+                        <span>🎯</span>
+                        <span>Ошибки (<span id="mistakesBadgeCount">0</span>)</span>
+                    </button>
+                </div>
+                <div id="flashcardsStat" class="hidden text-[11px] text-slate-500 pr-2 font-bold">
+                    Выучено: <span id="learnedCount" class="text-emerald-600">0</span>
+                </div>
+            </div>
+
+            <!-- КОНТЕЙНЕР 1: ДОРОЖКА УРОКОВ DUOLINGO (THE PATH) -->
+            <div id="germanPathContainer" class="flex-1 overflow-y-auto pr-1">
+                <!-- Заполняется движком lingoEngine.renderPathView() -->
+            </div>
+
+            <!-- КОНТЕЙНЕР 2: САМ УРОК DUOLINGO (ИГРА, WORD BANK, MATCH PAIRS) -->
+            <div id="lingoAppContainer" class="hidden flex-1 overflow-y-auto h-full">
+                <!-- Заполняется lingoEngine при старте урока -->
+            </div>
+
+            <!-- КОНТЕЙНЕР 3: КАРТОЧКИ СЛОВ (ANKI) -->
+            <div id="germanFlashcardsContainer" class="hidden flex-1 overflow-y-auto space-y-4 pr-1">
+                <!-- Заполняется для режима Flashcards -->
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА 4: ПСИХОЛОГИЧЕСКАЯ БИБЛИОТЕКА -->
+        <section id="tab-library" class="tab-content hidden flex-1 flex flex-col bg-white/90 backdrop-blur rounded-2xl shadow-xl border border-rose-100 p-4 overflow-hidden h-full">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3 shrink-0">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-800">📚 Фундаментальная библиотека психологии</h2>
+                    <p class="text-xs text-slate-500">Берн, Ялом, Готтман, Франкл, Уист, Диспенза, Фьоре</p>
+                </div>
+                <div class="w-full sm:w-auto">
+                    <input type="text" id="librarySearch" placeholder="Поиск книг и авторов..." class="w-full sm:w-64 px-3 py-1.5 text-xs border border-rose-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-400 bg-rose-50/30" oninput="filterLibrary()">
+                </div>
+            </div>
+            <div id="libraryList" class="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-3 pr-1">
+                <!-- Динамически загружается через JS -->
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА 5: ДОСЬЕ И ПАМЯТЬ АЛИНЫ -->
+        <section id="tab-dossier" class="tab-content hidden flex-1 flex flex-col bg-white/90 backdrop-blur rounded-2xl shadow-xl border border-rose-100 p-4 overflow-hidden h-full">
+            <div class="mb-3 shrink-0">
+                <h2 class="text-lg font-bold text-slate-800">💖 Персональное досье Алины</h2>
+                <p class="text-xs text-slate-500">Информация, зафиксированная в базе данных Supabase для персонального психологического ведения</p>
+            </div>
+            <div class="flex-1 overflow-y-auto space-y-4 pr-1">
+                <div class="bg-rose-50/60 border border-rose-200 rounded-xl p-4 space-y-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">Имя</label>
+                            <input type="text" id="dossierName" value="Алина" class="w-full px-3 py-2 text-xs border border-rose-200 rounded-lg bg-white font-medium">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">Возраст и День рождения</label>
+                            <input type="text" id="dossierAgeBday" value="35 лет, 25 сентября" class="w-full px-3 py-2 text-xs border border-rose-200 rounded-lg bg-white font-medium">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">Происхождение</label>
+                            <input type="text" id="dossierOrigin" value="Украинка (родом из Украины)" class="w-full px-3 py-2 text-xs border border-rose-200 rounded-lg bg-white font-medium">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">Муж</label>
+                            <input type="text" id="dossierHusband" value="Роман (очень любит и заботится)" class="w-full px-3 py-2 text-xs border border-rose-200 rounded-lg bg-white font-medium">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">Ключевые терапевтические ориентиры коуча</label>
+                        <textarea id="dossierNotes" rows="3" class="w-full px-3 py-2 text-xs border border-rose-200 rounded-lg bg-white">Алина — украинка, 35 лет. Муж Роман. Цель: освоение немецкого B1, преодоление усталости и перфекционизма. Профессиональный психологический подход (КПТ, Транзактный анализ, системная семейная терапия).</textarea>
+                    </div>
+
+                    <button onclick="saveDossierSettings()" class="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold rounded-xl text-xs shadow-md hover:opacity-95 transition">
+                        Сохранить изменения в Supabase
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Нижняя мобильная навигация -->
+    <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-lg border-t border-rose-100 px-2 py-1.5 flex justify-around items-center z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-[env(safe-area-inset-bottom)]">
+        <button onclick="switchTab('chat')" id="nav-btn-chat" class="flex flex-col items-center justify-center text-rose-600 flex-1 py-1 transition">
+            <span class="text-lg">💬</span>
+            <span class="text-[10px] font-bold mt-0.5">Диалог</span>
+        </button>
+        <button onclick="switchTab('live')" id="nav-btn-live" class="flex flex-col items-center justify-center text-slate-400 hover:text-rose-600 flex-1 py-1 transition">
+            <span class="text-lg">🎙</span>
+            <span class="text-[10px] font-medium mt-0.5">Live Voice</span>
+        </button>
+        <button onclick="switchTab('german')" id="nav-btn-german" class="flex flex-col items-center justify-center text-slate-400 hover:text-rose-600 flex-1 py-1 transition">
+            <span class="text-lg">🇩🇪</span>
+            <span class="text-[10px] font-medium mt-0.5">Немецкий</span>
+        </button>
+        <button onclick="switchTab('library')" id="nav-btn-library" class="flex flex-col items-center justify-center text-slate-400 hover:text-rose-600 flex-1 py-1 transition">
+            <span class="text-lg">📚</span>
+            <span class="text-[10px] font-medium mt-0.5">Книги</span>
+        </button>
+        <button onclick="switchTab('dossier')" id="nav-btn-dossier" class="flex flex-col items-center justify-center text-slate-400 hover:text-rose-600 flex-1 py-1 transition">
+            <span class="text-lg">💖</span>
+            <span class="text-[10px] font-medium mt-0.5">Досье</span>
+        </button>
+    </nav>
+
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+    <script src="/static/duolingo/duolingo.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
