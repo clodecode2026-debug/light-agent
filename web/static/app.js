@@ -501,10 +501,16 @@ async function send() {
 
   const live = el('div', 'thinking');
   live.innerHTML =
-    '<span class="spin"></span>' +
+    '<span class="spin-wrap">' +
+      '<svg class="spin-svg" viewBox="0 0 20 20" width="14" height="14" style="vertical-align:middle;flex-shrink:0;">' +
+        '<circle cx="10" cy="10" r="7.5" stroke="rgba(255,255,255,0.22)" stroke-width="2.5" fill="none"/>' +
+        '<circle cx="10" cy="10" r="7.5" stroke="#d97757" stroke-width="2.5" stroke-dasharray="13 35" stroke-linecap="round" fill="none"/>' +
+        '<animateTransform attributeName="transform" type="rotate" from="0 10 10" to="360 10 10" dur="0.8s" repeatCount="indefinite"/>' +
+      '</svg>' +
+    '</span>' +
     '<span class="think-text">Думаю</span>' +
     '<span class="dots" aria-hidden="true"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>' +
-    '<span class="caret"></span>' +
+    '<span class="caret-block"></span>' +
     '<span class="step">шаг 1</span>';
   body.appendChild(live);
 
@@ -901,7 +907,8 @@ async function loadProjects() {
     list.forEach(p => {
       const opt = document.createElement('option');
       opt.value = p.slug;
-      opt.textContent = `${p.name} (${p.files || 0} ф.)`;
+      const countLabel = p.messages ? `${p.messages} сообщ.` : (p.files ? `${p.files} ф.` : '0 сообщ.');
+      opt.textContent = `${p.name} (${countLabel})`;
       if (p.slug === state.project) {
         opt.selected = true;
         found = true;
@@ -967,6 +974,55 @@ async function newProjectPrompt() {
 /* =================== Сессии и история =================== */
 let welcomeTemplate = '';
 
+async function renderRecentSessionChips() {
+  try {
+    const r = await fetch('/api/sessions?project=' + encodeURIComponent(state.project));
+    const d = await r.json();
+    const sessions = (d.sessions || []).filter(s => s.message_count > 0).slice(0, 5);
+    if (!sessions.length) return;
+    const welcomeEl = $('#welcome');
+    if (!welcomeEl) return;
+    let chipWrap = welcomeEl.querySelector('.recent-chats-wrap');
+    if (chipWrap) chipWrap.remove();
+    chipWrap = document.createElement('div');
+    chipWrap.className = 'recent-chats-wrap';
+    chipWrap.style.cssText = 'margin:14px 0 10px;padding:12px;background:var(--bg2,#212120);border:1px solid var(--line,#343432);border-radius:10px;text-align:left;';
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:11.5px;font-weight:600;color:var(--dim,#999);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;';
+    heading.textContent = '💬 Недавние диалоги проекта ' + state.project + ' (нажмите, чтобы открыть):';
+    chipWrap.appendChild(heading);
+    const listDiv = document.createElement('div');
+    listDiv.className = 'recent-chats-list';
+    listDiv.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    sessions.forEach(s => {
+      const item = document.createElement('button');
+      item.className = 'recent-chat-btn';
+      item.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 11px;background:var(--bg,#181817);border:1px solid var(--line2,#3e3e3b);border-radius:6px;color:var(--txt,#ececec);font-size:12.5px;cursor:pointer;text-align:left;transition:all 0.15s;width:100%;';
+      item.onmouseenter = () => { item.style.borderColor = 'var(--acc,#d97757)'; item.style.background = '#252523'; };
+      item.onmouseleave = () => { item.style.borderColor = 'var(--line2,#3e3e3b)'; item.style.background = 'var(--bg,#181817)'; };
+      const titleSpan = document.createElement('span');
+      titleSpan.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-weight:500;';
+      titleSpan.textContent = s.title || s.id;
+      const countSpan = document.createElement('span');
+      countSpan.style.cssText = 'font-size:10.5px;color:var(--dim,#888);background:rgba(255,255,255,0.06);padding:2px 7px;border-radius:10px;flex-shrink:0;';
+      countSpan.textContent = `${s.message_count} сообщ.`;
+      item.appendChild(titleSpan);
+      item.appendChild(countSpan);
+      item.onclick = () => switchSession(s.id);
+      listDiv.appendChild(item);
+    });
+    chipWrap.appendChild(listDiv);
+    const hint = welcomeEl.querySelector('.hintline');
+    if (hint) {
+      welcomeEl.insertBefore(chipWrap, hint.nextSibling);
+    } else {
+      welcomeEl.appendChild(chipWrap);
+    }
+  } catch (e) {
+    console.warn('Не удалось загрузить недавние диалоги', e);
+  }
+}
+
 function showWelcome() {
   const inner = $('#chatInner');
   if (!welcomeTemplate && $('#welcome')) {
@@ -981,6 +1037,7 @@ function showWelcome() {
         send();
       };
     });
+    renderRecentSessionChips();
   } else {
     inner.innerHTML = '';
   }
@@ -1394,8 +1451,11 @@ async function loadStatus() {
 
     const bMem = $('#bMem');
     if (bMem) {
-      bMem.textContent = s.memory && s.memory.enabled ? 'память' : 'без памяти';
-      bMem.className = 'badge ' + (s.memory && s.memory.enabled ? 'ok' : 'bad');
+      const hasMem = s.memory && s.memory.enabled;
+      const count = s.memory && s.memory.messages ? ` (${s.memory.messages})` : '';
+      bMem.textContent = hasMem ? `Supabase${count}` : 'без памяти';
+      bMem.className = 'badge ' + (hasMem ? 'ok' : 'bad');
+      bMem.title = hasMem ? `Supabase база активна: ${s.memory.messages || 0} сообщений в памяти агента` : 'Память отключена';
     }
 
     const bSto = $('#bSto');
