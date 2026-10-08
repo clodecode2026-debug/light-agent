@@ -27,8 +27,8 @@ WEB_DIR = config.BASE_DIR / "web"
 CLEANABLE_PREFIXES = ("tmp_", "diag_", "test_")
 CLEANABLE_SUFFIXES = (".tmp", ".log", ".bak", ".old")
 
-# Сколько живёт SSE-соединение, чтобы не держать поток вечно
-SSE_MAX_SECONDS = 300
+# Сколько живёт SSE-соединение (увеличено для сканирования и работы с крупными проектами)
+SSE_MAX_SECONDS = 3600
 
 
 @asynccontextmanager
@@ -54,7 +54,7 @@ app = FastAPI(title="Light Agent", version="2.0", lifespan=lifespan)
 # ---------------- Схемы ----------------
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=8000)
+    message: str = Field(..., min_length=1, max_length=120000)
     session_id: str = Field("default", max_length=100)
     project: str = Field("default", max_length=100)
     model: str | None = None
@@ -346,8 +346,21 @@ async def api_tree(path: str = ".", depth: int = Query(4, ge=1, le=10),
                     size = e.stat().st_size
                 except OSError:
                     size = 0
+                ext = e.suffix.lower()
+                if tools.is_image(e.name):
+                    ftype = "image"
+                elif ext == ".pdf":
+                    ftype = "pdf"
+                elif ext in (".mp3", ".wav", ".ogg", ".m4a"):
+                    ftype = "audio"
+                elif ext in (".mp4", ".webm", ".mov", ".mkv"):
+                    ftype = "video"
+                elif ext in (".md", ".markdown"):
+                    ftype = "markdown"
+                else:
+                    ftype = "file"
                 items.append({
-                    "type": "image" if tools.is_image(e.name) else "file",
+                    "type": ftype,
                     "name": e.name, "path": rel, "size": size,
                 })
         return items
@@ -359,30 +372,59 @@ async def api_tree(path: str = ".", depth: int = Query(4, ge=1, le=10),
 
 @app.get("/api/raw")
 async def api_raw(path: str, project: str = Query("default")):
-    """Отдаёт файл из папки проекта как есть."""
+    """Отдаёт файл из папки проекта как есть с корректным Content-Type для отображения."""
     proj = project if isinstance(project, str) else "default"
     full = _safe(path, project=proj)
     if not full.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
-    return FileResponse(full)
+    ext = full.suffix.lower()
+    media_map = {
+        ".pdf": "application/pdf",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".ogg": "audio/ogg",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".json": "application/json",
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+    }
+    media_type = media_map.get(ext)
+    headers = {"Content-Disposition": f'inline; filename="{full.name}"'}
+    return FileResponse(full, media_type=media_type, headers=headers)
 
 
 @app.get("/api/file")
 async def api_read(path: str, project: str = Query("default")):
-    """Читает текстовый файл из проекта для просмотра и правки."""
+    """Читает файл из проекта для встроенного просмотра (PDF, картинки, медиа, код)."""
     proj = project if isinstance(project, str) else "default"
     full = _safe(path, project=proj)
     if not full.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
+    ext = full.suffix.lower()
+    size = full.stat().st_size
+    if ext == ".pdf":
+        return {"path": path, "is_pdf": True, "size": size, "name": full.name}
+    if ext in (".mp3", ".wav", ".ogg", ".m4a"):
+        return {"path": path, "is_audio": True, "size": size, "name": full.name}
+    if ext in (".mp4", ".webm", ".mov"):
+        return {"path": path, "is_video": True, "size": size, "name": full.name}
     if tools.is_image(str(full)):
         return {"path": path, "is_image": True,
                 "mime": tools.image_mime(str(full)),
-                "size": full.stat().st_size}
+                "size": size}
+    is_markdown = ext in (".md", ".markdown")
     try:
-        if full.stat().st_size > 400_000:
-            return {"path": path, "too_big": True,
-                    "message": "Файл больше 400 КБ - скачай его вместо просмотра"}
-        return {"path": path, "is_image": False,
+        if size > 600_000:
+            return {"path": path, "too_big": True, "size": size,
+                    "message": f"Файл {round(size/1024, 1)} КБ слишком большой для прямого редактирования. Используйте скачивание."}
+        return {"path": path, "is_image": False, "is_markdown": is_markdown, "size": size,
                 "content": full.read_text(encoding="utf-8", errors="replace")}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
