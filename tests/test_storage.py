@@ -11,6 +11,9 @@ import os
 import sys
 import uuid
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
@@ -105,6 +108,5 @@ step("presigned_url", lambda: s3.generate_presigned_url(
 )[:80] + "...")
 step("delete_object", lambda: s3.delete_object(Bucket=BUCKET, Key=key) and "deleted")
 
-show("\nRESULT: all operations passed" if ok
-     else "\nRESULT: failures above")
-sys.exit(0 if ok else 1)
+if __name__ == '__main__':
+    sys.exit(0 if ok else 1)
